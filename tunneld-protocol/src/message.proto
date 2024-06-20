@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package message;
+
+service TunnelService {
+  rpc ClientHello(Hello) returns (HelloResponse) {}
+  rpc ClientClose(Close) returns (CloseResponse) {}
+  rpc Tunnel(stream Traffic) returns (stream Traffic) {}
+}
+
+// The client sends a Hello message to the server to establish a tunnel.
+message Hello {
+  Tunnel tunnel = 1;
+}
+
+// The server responds tunnel id to the client, then the client call `Tunnel`
+// to establish a bidirectional connection.
+message HelloResponse {
+  // the server assigns the tunnel id to the client.
+  string id = 1;
+}
+
+message Close {
+  // the server assigns the tunnel id to the client.
+  string id = 1;
+}
+
+message CloseResponse {}
+
+message Traffic {
+  bytes data = 1;
+}
+
+// Each tunnel is a bidirectional connection between the client and the server.
+// Basically, one tunnel corresponds to one http2 connection.
+message Tunnel {
+  // id is the unique identifier of the tunnel,
+  // it's assigned by the server.
+  string id = 1;
+  // name is the name of the tunnel.
+  string name = 2;
+
+  enum Type {
+    TCP = 0;
+    HTTP = 10;
+  }
+
+  Type type = 3;
+
+  oneof config {
+    HTTPConfig http = 4;
+    TCPConfig tcp = 5;
+  }
+}
+
+message HTTPConfig {
+  oneof mode {
+    // the server starts to listen on the remote_port.
+    int32 remote_port = 1;
+    // the server's public domain is https://tunneld.dev,
+    // you may configure a subdomain https://monitor.tunneld.dev,
+    // then the request matches the subdomain will be forwarded to the related tunnel.
+    string domain = 2;
+  }
+}
+
+message TCPConfig {
+  int32 remote_port = 1;
+}
+
+message ServerHello {
+  string server_version = 1;
+}

@@ -1,0 +1,17 @@
+[package]
+name = "tunneld"
+
+[workspace]
+resolver = "2"
+members = [
+  "tunneld-server",
+  "tunneld-client", "tunneld-protocol",
+]
+ 
+[[bin]]
+name = "tunnel"
+path = "tunneld-client/src/main.rs"
+
+[[bin]]
+name = "tunneld"
+path = "tunneld-server/src/main.rs"
