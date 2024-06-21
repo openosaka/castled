@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package message;
+
+service TunnelService {
+  // the client sends Register to the server to create a tunnel.
+  // the server returns a stream Control to the client, the following control messages are sent through the stream.
+  rpc Register(RegisterReq) returns (stream ControlStream) {}
+
+  // Unregister provides a graceful way to close a tunnel if the client wants to close.
+  rpc UnRegister(UnRegisterReq) returns (UnRegisteredResp) {}
+
+  // server side: write data to the traffic stream, and read data from the traffic stream.
+  // client side: read data from the traffic stream, and write data to the traffic stream.
+  rpc Data(stream TrafficStream) returns (stream TrafficStream) {}
+}
+
+enum Command {
+  // Init command is sent only once as the first control message to the client.
+  Init = 0;
+  // Work command is sent when a user connection is established,
+  // then the client needs to start a Data stream to receive and send data.
+  Work = 1;
+}
+
+// Control message is used to control the tunnel.
+message ControlStream {
+  Command command = 1;
+
+  oneof payload {
+    InitPayload init = 2;
+    WorkPayload work = 3;
+  }
+}
+
+message InitPayload {
+  string server_version = 1;
+  string tunnel_id = 2;
+  string assigned_entrypoint = 3;
+}
+
+message WorkPayload {}
+
+message TrafficStream {
+  bytes data = 1;
+}
+
+message RegisterReq {
+  string client_version = 1;
+  Tunnel tunnel = 2;
+}
+
+// Each tunnel is a bidirectional connection between the client and the server.
+// Basically, one tunnel corresponds to one http2 connection.
+message Tunnel {
+  // id is the unique identifier of the tunnel,
+  // it's assigned by the server.
+  string id = 1;
+  // name is the name of the tunnel.
+  string name = 2;
+
+  enum Type {
+    TCP = 0;
+    HTTP = 10;
+  }
+
+  Type type = 3;
+
+  oneof config {
+    HTTPConfig http = 4;
+    TCPConfig tcp = 5;
+  }
+}
+
+message HTTPConfig {
+  oneof mode {
+    // the server starts to listen on the remote_port.
+    int32 remote_port = 1;
+    // the server assigns https://{subdomain}.{domain} as the entrypoint for the tunnel.
+    string subdomain = 2;
+    // the server's public domain is https://tunneld.dev,
+    // you may configure a subdomain https://monitor.tunneld.dev,
+    // then the request matches the subdomain will be forwarded to the related tunnel.
+    string domain = 3;
+  }
+}
+
+message TCPConfig {
+  int32 remote_port = 1;
+}
+
+message UnRegisterReq {
+  // id is the tunnel id.
+  string id = 1;
+}
+
+message UnRegisteredResp {}
