@@ -5,14 +5,15 @@ package message;
 service TunnelService {
   // the client sends Register to the server to create a tunnel.
   // the server returns a stream Control to the client, the following control messages are sent through the stream.
-  rpc Register(RegisterReq) returns (stream ControlStream) {}
+  rpc Register(RegisterReq) returns (stream Control) {}
 
-  // Unregister provides a graceful way to close a tunnel if the client wants to close.
+  // Unregister provides a graceful way to close a tunnel if the client wants to
+  // close.
   rpc UnRegister(UnRegisterReq) returns (UnRegisteredResp) {}
 
-  // server side: write data to the traffic stream, and read data from the traffic stream.
-  // client side: read data from the traffic stream, and write data to the traffic stream.
-  rpc Data(stream TrafficStream) returns (stream TrafficStream) {}
+  // server side: write traffic to the stream, and read traffic from the stream.
+  // client side: read traffic from the stream, and write traffic to the stream.
+  rpc Data(stream Traffic) returns (stream Traffic) {}
 }
 
 enum Command {
@@ -23,8 +24,8 @@ enum Command {
   Work = 1;
 }
 
-// Control message is used to control the tunnel.
-message ControlStream {
+// Control is a stream used to control the tunnel.
+message Control {
   Command command = 1;
 
   oneof payload {
@@ -41,7 +42,7 @@ message InitPayload {
 
 message WorkPayload {}
 
-message TrafficStream {
+message Traffic {
   bytes data = 1;
 }
 
@@ -72,22 +73,24 @@ message Tunnel {
   }
 }
 
+// HttpConfig is used to tell the server how to create the http listener,
+// and how to route the request.
+//
+// these three fields are exclusive.
 message HTTPConfig {
-  oneof mode {
-    // the server starts to listen on the remote_port.
-    int32 remote_port = 1;
-    // the server assigns https://{subdomain}.{domain} as the entrypoint for the tunnel.
-    string subdomain = 2;
-    // the server's public domain is https://tunneld.dev,
-    // you may configure a subdomain https://monitor.tunneld.dev,
-    // then the request matches the subdomain will be forwarded to the related tunnel.
-    string domain = 3;
-  }
+  // the server will listen on the remote_port to accept the http request.
+  int32 remote_port = 1;
+  // the server assigns https://{subdomain}.{domain} as the entrypoint for the
+  // tunnel.
+  string subdomain = 2;
+  // the server's public domain is https://tunneld.dev,
+  // you may configure a subdomain https://monitor.tunneld.dev,
+  // then the request matches the subdomain will be forwarded to the related
+  // tunnel.
+  string domain = 3;
 }
 
-message TCPConfig {
-  int32 remote_port = 1;
-}
+message TCPConfig { int32 remote_port = 1; }
 
 message UnRegisterReq {
   // id is the tunnel id.
