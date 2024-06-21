@@ -1,5 +1,5 @@
-pub mod message {
-	include!(concat!(env!("OUT_DIR"), "/message.rs"));
+pub mod pb {
+	tonic::include_proto!("message");
 }
 
 pub struct Tunnel {
