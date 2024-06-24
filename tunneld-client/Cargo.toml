@@ -4,6 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+tunneld-protocol = { path = "../tunneld-protocol" }
+clap = { version = "4.5.7", features = ["derive"] }
+tokio = { version = "1.10.1", features = ["full"] }
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+anyhow = "1.0.86"
+tonic = "0.11.0"
+tokio-stream = "0.1.15"
+tokio-util = "0.7.11"
 
 [[bin]]
 name = "tunnel"
