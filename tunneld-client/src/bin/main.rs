@@ -10,7 +10,7 @@ struct Args {
     #[command(subcommand)]
     command: Commands,
 
-    #[arg(long, default_value = "127.0.0.1:6610", required = true)]
+    #[arg(long, default_value = "127.0.0.1:6610")]
     server_addr: SocketAddr,
 }
 
@@ -30,6 +30,8 @@ enum Commands {
     },
 }
 
+const TUNNEL_NAME: &str = "tunneld-client";
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -48,11 +50,11 @@ async fn main() {
         cancel_w.cancel();
     });
 
-    let mut client = tunneld_client::Client::new(&args.server_addr).await.unwrap();
+    let mut client = tunneld_client::Client::new(&args.server_addr).unwrap();
 
     match args.command {
         Commands::Tcp { remote_port } => {
-            client.add_tcp_tunnel(remote_port);
+            client.add_tcp_tunnel(TUNNEL_NAME.to_string(), remote_port);
         }
         Commands::Http {
             remote_port,
