@@ -17,6 +17,7 @@ anyhow = "1.0.86"
 tonic = "0.11.0"
 tokio-stream = "0.1.15"
 tokio-util = "0.7.11"
+futures = "0.3.30"
 
 [[bin]]
 name = "tunneld"

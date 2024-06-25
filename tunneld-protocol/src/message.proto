@@ -7,10 +7,6 @@ service TunnelService {
   // the server returns a stream Control to the client, the following control messages are sent through the stream.
   rpc Register(RegisterReq) returns (stream Control) {}
 
-  // Unregister provides a graceful way to close a tunnel if the client wants to
-  // close.
-  rpc UnRegister(UnRegisterReq) returns (UnRegisteredResp) {}
-
   // server side: write traffic to the stream, and read traffic from the stream.
   // client side: read traffic from the stream, and write traffic to the stream.
   rpc Data(stream Traffic) returns (stream Traffic) {}
@@ -91,10 +87,3 @@ message HTTPConfig {
 }
 
 message TCPConfig { int32 remote_port = 1; }
-
-message UnRegisterReq {
-  // id is the tunnel id.
-  string id = 1;
-}
-
-message UnRegisteredResp {}

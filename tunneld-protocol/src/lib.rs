@@ -2,9 +2,6 @@ pub mod pb {
 	tonic::include_proto!("message");
 }
 
-pub struct Tunnel {
-}
-
 // #[cfg(test)]
 // mod tests {
 //     use super::*;

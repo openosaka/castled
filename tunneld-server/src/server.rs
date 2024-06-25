@@ -1,15 +1,28 @@
-use std::{net::ToSocketAddrs, pin::Pin};
+use std::{net::ToSocketAddrs, pin::Pin, thread::spawn};
 
 use crate::validate::validate_register_req;
 use crate::Config;
-use anyhow::Context;
-use tokio::{net::TcpListener, sync::mpsc};
-use tokio_stream::{wrappers::ReceiverStream, Stream};
+use anyhow::Context as _;
+use core::task::{Context, Poll};
+use tokio::{
+    net::TcpListener,
+    select,
+    sync::{
+        mpsc::{self, unbounded_channel, UnboundedSender},
+        oneshot,
+    },
+    time::sleep,
+};
+use tokio_stream::Stream;
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
 use tracing::{debug, error};
 use tunneld_protocol::pb::{
-    control::Payload, tunnel::Config::Tcp, tunnel_service_server::{TunnelService, TunnelServiceServer}, Command, Control, InitPayload, RegisterReq, Traffic, UnRegisterReq, UnRegisteredResp, WorkPayload
+    control::Payload,
+    tunnel::Config::Tcp,
+    tunnel_service_server::{TunnelService, TunnelServiceServer},
+    Command, Control, InitPayload, RegisterReq, Traffic,
+    WorkPayload,
 };
 
 #[derive(Debug, Default)]
@@ -19,8 +32,41 @@ pub struct Handler {
 
 type GrpcResult<T> = Result<T, Status>;
 type GrpcResponse<T> = GrpcResult<Response<T>>;
-type RegisterStream = Pin<Box<dyn Stream<Item = GrpcResult<Control>> + Send>>;
+type RegisterStream = Pin<Box<CancelableReceiver<GrpcResult<Control>>>>;
 type DataStream = Pin<Box<dyn Stream<Item = GrpcResult<Traffic>> + Send>>;
+
+pub struct CancelableReceiver<T> {
+    cancel: CancellationToken,
+    inner: mpsc::Receiver<T>,
+}
+
+impl<T> CancelableReceiver<T> {
+    pub fn new(cancel: CancellationToken, inner: mpsc::Receiver<T>) -> Self {
+        Self { cancel, inner }
+    }
+}
+
+impl<T> Stream for CancelableReceiver<T> {
+    type Item = T;
+
+    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        self.inner.poll_recv(cx)
+    }
+}
+
+impl<T> std::ops::Deref for CancelableReceiver<T> {
+    type Target = mpsc::Receiver<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T> Drop for CancelableReceiver<T> {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
 
 pub struct Server {
     config: Config,
@@ -42,8 +88,7 @@ impl Server {
     }
 
     pub async fn run(&mut self, cancel: CancellationToken) -> anyhow::Result<()> {
-        let _ = cancel;
-        let addr = format!("[::1]:{}", self.config.control_port)
+        let addr = format!("0.0.0.0:{}", self.config.control_port)
             .to_socket_addrs()
             .context("parse control port")?
             .next()
@@ -57,6 +102,8 @@ impl Server {
             parent_cancel.cancelled().await;
             server_cancel.cancel(); // cancel myself.
         });
+
+        debug!("starting server on: {}", addr);
 
         self.server
             .add_service(TunnelServiceServer::new(handler))
@@ -90,6 +137,9 @@ impl TunnelService for Handler {
             Status::internal("failed to send control stream")
         })?;
 
+        let cancel_listener_w = CancellationToken::new();
+        let cancel_listener = cancel_listener_w.clone();
+
         // TODO(sword): support more tunnel types
         // let's assume it's a TCP tunnel for now
         if let Tcp(tcp) = req.tunnel.as_ref().unwrap().config.as_ref().unwrap() {
@@ -99,32 +149,36 @@ impl TunnelService for Handler {
 
             tokio::spawn(async move {
                 loop {
-                    let (mut stream, addr) = listener.accept().await.unwrap();
-                    debug!("new user connection from: {:?}", addr);
+                    select! {
+                        _ = cancel_listener.cancelled() => {
+                            return;
+                        }
+                        result = listener.accept() => {
+                            let (mut stream, addr) = result.unwrap();
+                            debug!("new user connection from: {:?}", addr);
 
-                    tx.send(Ok(Control {
-                        command: Command::Work as i32,
-                        payload: Some(Payload::Work(WorkPayload {})),
-                    }))
-                    .await
-                    .context("failed to notify client to receive traffic")
-                    .unwrap();
+                            tx.send(Ok(Control {
+                                command: Command::Work as i32,
+                                payload: Some(Payload::Work(WorkPayload {})),
+                            }))
+                            .await
+                            .context("failed to notify client to receive traffic")
+                            .unwrap();
 
-                    tokio::spawn(async move {
-                        todo!("handle data stream");
-                    });
+                            tokio::spawn(async move {
+                                todo!("handle data stream");
+                            });
+                        }
+                    }
                 }
             });
         } else {
             unimplemented!("only support TCP tunnel for now")
         }
 
-        let control_stream = Box::pin(ReceiverStream::new(rx)) as self::RegisterStream;
+        let control_stream =
+            Box::pin(CancelableReceiver::new(cancel_listener_w, rx)) as self::RegisterStream;
         Ok(Response::new(control_stream))
-    }
-
-    async fn un_register(&self, req: Request<UnRegisterReq>) -> GrpcResponse<UnRegisteredResp> {
-        todo!()
     }
 
     type DataStream = DataStream;
@@ -170,6 +224,6 @@ mod tests {
             assert!(result.is_ok());
         });
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        sleep(tokio::time::Duration::from_millis(200)).await;
     }
 }
