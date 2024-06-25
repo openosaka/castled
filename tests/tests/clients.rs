@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use tunneld_client::Client;
 
 fn init() {
-    tracing_subscriber::fmt::init();
+    let _ = tracing_subscriber::fmt::try_init(); // the tracing subscriber is initialized only once
 }
 
 // after client registered a tunnel, 
@@ -16,11 +16,12 @@ async fn client_register_tcp() {
     init();
     let server = start_server().await;
     let close_client = server.cancel.clone();
+    let remote_port = free_port().unwrap();
 
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), 8080);
+        client.add_tcp_tunnel("test".to_string(), remote_port);
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client.run(close_client).await;
@@ -43,11 +44,12 @@ async fn client_register_and_close_then_register_again() {
 
     let cancel_client_w = CancellationToken::new();
     let close_client = cancel_client_w.clone();
+    let remote_port = free_port().unwrap();
 
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), 8080);
+        client.add_tcp_tunnel("test".to_string(), remote_port);
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client.run(close_client).await;
@@ -68,7 +70,7 @@ async fn client_register_and_close_then_register_again() {
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), 8080);
+        client.add_tcp_tunnel("test".to_string(), remote_port);
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client.run(close_client).await;

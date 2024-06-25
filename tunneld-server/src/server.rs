@@ -21,7 +21,7 @@ use tunneld_protocol::pb::{
     control::Payload,
     tunnel::Config::Tcp,
     tunnel_service_server::{TunnelService, TunnelServiceServer},
-    Command, Control, InitPayload, RegisterReq, Traffic, UnRegisterReq, UnRegisteredResp,
+    Command, Control, InitPayload, RegisterReq, Traffic,
     WorkPayload,
 };
 
@@ -179,10 +179,6 @@ impl TunnelService for Handler {
         let control_stream =
             Box::pin(CancelableReceiver::new(cancel_listener_w, rx)) as self::RegisterStream;
         Ok(Response::new(control_stream))
-    }
-
-    async fn un_register(&self, req: Request<UnRegisterReq>) -> GrpcResponse<UnRegisteredResp> {
-        todo!()
     }
 
     type DataStream = DataStream;
