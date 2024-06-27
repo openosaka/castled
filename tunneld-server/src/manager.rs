@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use tokio::io::AsyncWriteExt as _; // for shutdown() method
+use tokio::io::AsyncWriteExt; // for shutdown() method
 use tokio::{io, select, spawn, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -49,23 +49,27 @@ impl TcpManager {
     async fn handle_listener(
         &self,
         listener: tokio::net::TcpListener,
-        cancel: CancellationToken,
+        shutdown: CancellationToken,
         new_connection_sender: mpsc::Sender<event::Connection>,
     ) {
         loop {
             select! {
-                _ = cancel.cancelled() => {
+                _ = shutdown.cancelled() => {
                     return;
                 }
                 result = listener.accept() => {
-                    let (stream, addr) = result.unwrap();
+                    let ( stream, addr) = result.unwrap();
                     let connection_id = Uuid::new_v4().to_string();
                     let (data_channel, mut data_channel_rx) = mpsc::channel(1024);
                     debug!("new user connection {} from: {:?}", connection_id, addr);
 
+                    let cancel_w = CancellationToken::new();
+                    let cancel = cancel_w.clone();
+
                     let event = event::Connection{
-                        id: connection_id,
+                        id: connection_id.clone(),
                         channel: data_channel.clone(),
+                        cancel: cancel_w,
                     };
                     new_connection_sender.send(event).await.unwrap();
                     let data_sender = data_channel_rx.recv().await.context("failed to receive data_sender").unwrap();
@@ -76,8 +80,8 @@ impl TcpManager {
                         }
                     };
 
+                    let (mut remote_reader, mut remote_writer) = stream.into_split();
                     tokio::spawn(async move {
-                        let (mut remote_reader, mut remote_writer) = stream.into_split();
                         let wrapper = VecWrapper::<Vec<u8>>::new();
                         let mut tunnel_writer = StreamingWriter::new(data_sender, wrapper);
                         let mut tunnel_reader = StreamingReader::new(data_channel_rx); // we expect to receive data from data_channel_rx after the first time.
@@ -89,7 +93,13 @@ impl TcpManager {
                             io::copy(&mut tunnel_reader, &mut remote_writer).await.unwrap();
                             remote_writer.shutdown().await.context("failed to shutdown remote writer").unwrap();
                         };
-                        tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remove);
+
+                        tokio::select! {
+                            _ = async { tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remove) } => {}
+                            _ = cancel.cancelled() => {
+                                debug!("connection {} closed", connection_id);
+                            }
+                        }
                     });
                 }
             }

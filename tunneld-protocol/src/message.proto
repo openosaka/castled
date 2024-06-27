@@ -52,6 +52,10 @@ message TrafficToServer {
     // finish sending the traffic.
     // the server expects only receiving `Finished` action once.
     Finished = 2;
+    // the client sends the Close action to tell the server to close the user connection. 
+    // generally, when something bad happens below:
+    // - can't dial the local upstream.
+    Close = 3;
   }
 
   // when the user connects to the remote_port, the server assigns a unique_id to this connection.

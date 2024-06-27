@@ -3,18 +3,16 @@ use std::{net::ToSocketAddrs, pin::Pin};
 
 use crate::{manager, Config};
 use anyhow::Context as _;
-use uuid::Uuid;
 use core::task::{Context, Poll};
 use dashmap::DashMap;
 use futures::StreamExt;
-use tokio::sync::oneshot;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
 use tracing::{debug, error, warn};
 use tunneld_pkg::event;
-use tunneld_protocol::validate::validate_register_req;
 use tunneld_protocol::pb::{
     control::Payload,
     tunnel::Config::Tcp,
@@ -22,6 +20,8 @@ use tunneld_protocol::pb::{
     Command, Control, InitPayload, RegisterReq, TrafficToClient, WorkPayload,
 };
 use tunneld_protocol::pb::{traffic_to_server, TrafficToServer};
+use tunneld_protocol::validate::validate_register_req;
+use uuid::Uuid;
 
 pub struct Handler {
     event_tx: mpsc::Sender<event::Event>,
@@ -243,7 +243,7 @@ impl TunnelService for Handler {
                         match traffic_to_server::Action::try_from(traffic.action) {
                             Ok(traffic_to_server::Action::Start) => {
                                 debug!(
-                                    "client started to receive traffic, connection_id: {}",
+                                    "received start action from connection {}, I am gonna start streaming",
                                     connection_id,
                                 );
                                 if started {
@@ -252,25 +252,31 @@ impl TunnelService for Handler {
                                 }
                                 started = true;
 
-                                // we read data from streaming_rx, then forward the data
-                                // to
-                                let (streaming_tx, mut streaming_rx) = mpsc::channel(1024);
+                                // we read data from transfer_rx, then forward the data to outbound_tx
+                                let (transfer_tx, mut transfer_rx) = mpsc::channel(1024);
                                 connection
                                     .channel
                                     .send(event::ConnectionChannelDataType::DataSender(
-                                        streaming_tx,
+                                        transfer_tx,
                                     ))
                                     .await
                                     .context("failed to send streaming_tx to data_sender_sender")
                                     .unwrap();
                                 let outbound_tx = outbound_tx.clone();
                                 tokio::spawn(async move {
-                                    while let Some(data) = streaming_rx.recv().await {
-                                        outbound_tx
-                                            .send(Ok(TrafficToClient { data }))
-                                            .await
-                                            .context("failed to send traffic to outbound channel")
-                                            .unwrap();
+                                    loop {
+                                        tokio::select! {
+                                            Some(data) = transfer_rx.recv() => {
+                                                outbound_tx
+                                                    .send(Ok(TrafficToClient { data }))
+                                                    .await
+                                                    .context("failed to send traffic to outbound channel")
+                                                    .unwrap();
+                                            }
+                                            _ = outbound_tx.closed() => {
+                                                break
+                                            }
+                                        }
                                     }
                                 });
                             }
@@ -290,6 +296,17 @@ impl TunnelService for Handler {
                                     "client finished sending traffic, connection_id: {}",
                                     connection_id
                                 );
+                                connections.remove(&connection_id);
+                            }
+                            Ok(traffic_to_server::Action::Close) => {
+                                debug!(
+                                    "client closed streaming, connection_id: {}",
+                                    connection_id
+                                );
+                                connection.cancel.cancel();
+                                connections.remove(&connection_id);
+                                // notify tcp manager to close the user connection
+                                break;
                             }
                             Err(_) => {
                                 error!("invalid traffic action: {}", traffic.action);
