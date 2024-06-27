@@ -5,4 +5,5 @@ members = [
   "tunneld-server",
   "tunneld-client", 
   "tunneld-protocol",
+  "tunneld-pkg",
 ]

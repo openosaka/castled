@@ -9,7 +9,7 @@ service TunnelService {
 
   // server side: write traffic to the stream, and read traffic from the stream.
   // client side: read traffic from the stream, and write traffic to the stream.
-  rpc Data(stream Traffic) returns (stream Traffic) {}
+  rpc Data(stream TrafficToServer) returns (stream TrafficToClient) {}
 }
 
 enum Command {
@@ -36,9 +36,37 @@ message InitPayload {
   string assigned_entrypoint = 3;
 }
 
-message WorkPayload {}
+// WorkPayload is sent when the server establishes a user connection.
+message WorkPayload {
+  // connection_id is the unique identifier of the connection which is assigned by the server.
+  string connection_id = 1;
+}
 
-message Traffic {
+message TrafficToServer {
+  enum Action {
+    // start to send the traffic.
+    // the server expects only receiving `Start` action once.
+    Start = 0;
+    // sending the traffic.
+    Sending = 1;
+    // finish sending the traffic.
+    // the server expects only receiving `Finished` action once.
+    Finished = 2;
+  }
+
+  // when the user connects to the remote_port, the server assigns a unique_id to this connection.
+  string connection_id = 1;
+  // status is the status of the traffic, when the traffic streaming starts,
+  // the first message should be the Start status without data,
+  // then the client sends the data with the Sending status with data,
+  // finally, after the local upstream finishes the response, the client sends the Finished status without data.
+  Action action = 2;
+
+  // data is the traffic data.
+  bytes data = 3;
+}
+
+message TrafficToClient {
   bytes data = 1;
 }
 

@@ -1,0 +1,182 @@
+{
+	// Use IntelliSense to learn about possible attributes.
+	// Hover to view descriptions of existing attributes.
+	// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug unit tests in library 'tests'",
+			"cargo": {
+				"args": [
+					"test",
+					"--no-run",
+					"--lib",
+					"--package=tests"
+				],
+				"filter": {
+					"name": "tests",
+					"kind": "lib"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug integration test 'clients'",
+			"cargo": {
+				"args": [
+					"test",
+					"--no-run",
+					"--test=clients",
+					"--package=tests"
+				],
+				"filter": {
+					"name": "clients",
+					"kind": "test"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug unit tests in library 'tunneld-client'",
+			"cargo": {
+				"args": [
+					"test",
+					"--no-run",
+					"--lib",
+					"--package=tunneld-client"
+				],
+				"filter": {
+					"name": "tunneld-client",
+					"kind": "lib"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug client tcp tunnel",
+			"cargo": {
+				"args": [
+					"build",
+					"--bin=tunnel",
+					"--package=tunneld-client",
+				],
+				"filter": {
+					"name": "tunnel",
+					"kind": "bin"
+				}
+			},
+			"args": [
+					"tcp",
+					"9991",
+					"--remote-port",
+					"9992"
+			],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug unit tests in executable 'tunnel'",
+			"cargo": {
+				"args": [
+					"test",
+					"--no-run",
+					"--bin=tunnel",
+					"--package=tunneld-client"
+				],
+				"filter": {
+					"name": "tunnel",
+					"kind": "bin"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug unit tests in library 'tunneld_protocol'",
+			"cargo": {
+				"args": [
+					"test",
+					"--no-run",
+					"--lib",
+					"--package=tunneld-protocol"
+				],
+				"filter": {
+					"name": "tunneld_protocol",
+					"kind": "lib"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug unit tests in library 'tunneld_server'",
+			"cargo": {
+				"args": [
+					"test",
+					"--no-run",
+					"--lib",
+					"--package=tunneld-server"
+				],
+				"filter": {
+					"name": "tunneld_server",
+					"kind": "lib"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug executable 'tunneld'",
+			"cargo": {
+				"args": [
+					"build",
+					"--bin=tunneld",
+					"--package=tunneld-server"
+				],
+				"filter": {
+					"name": "tunneld",
+					"kind": "bin"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug unit tests in executable 'tunneld'",
+			"cargo": {
+				"args": [
+					"test",
+					"--no-run",
+					"--bin=tunneld",
+					"--package=tunneld-server"
+				],
+				"filter": {
+					"name": "tunneld",
+					"kind": "bin"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}"
+		}
+	]
+}
