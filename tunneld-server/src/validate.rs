@@ -39,9 +39,6 @@ pub fn validate_register_req(req: &RegisterReq) -> Option<Status> {
 				}
 			}
 		}
-		_ => {
-			return Some(Status::invalid_argument("invalid tunnel type"));
-		}
 	}
     None
 }

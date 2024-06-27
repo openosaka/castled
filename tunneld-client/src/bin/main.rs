@@ -17,6 +17,8 @@ struct Args {
 #[derive(Subcommand)]
 enum Commands {
     Tcp {
+        #[clap(index = 1)]
+        port: u16,
         #[arg(long, required = true)]
         remote_port: u16,
     },
@@ -53,8 +55,8 @@ async fn main() {
     let mut client = tunneld_client::Client::new(&args.server_addr).unwrap();
 
     match args.command {
-        Commands::Tcp { remote_port } => {
-            client.add_tcp_tunnel(TUNNEL_NAME.to_string(), remote_port);
+        Commands::Tcp { port, remote_port } => {
+            client.add_tcp_tunnel(TUNNEL_NAME.to_string(), remote_port, port);
         }
         Commands::Http {
             remote_port,
