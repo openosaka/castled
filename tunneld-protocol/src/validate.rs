@@ -1,5 +1,5 @@
 use tonic::Status;
-use tunneld_protocol::pb::{
+use crate::pb::{
 	tunnel::Type, RegisterReq,
 	tunnel::Config::Http,
 	tunnel::Config::Tcp,

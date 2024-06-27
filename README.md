@@ -1,6 +1,6 @@
 # Tunneld
 
-Tunneld is a simple tunneling tool that allows you to expose your local services to the internet,
+Tunneld is a simple tunnel based on GRPC that allows you to expose your local services to the internet,
 but it's **mainly designed for 🌟testing and ✨development purposes**.
 
 It resolves the problem of let your k8s inside traffic to reach your local services, the great

@@ -8,8 +8,5 @@ pub fn free_port() -> std::io::Result<u16> {
 }
 
 pub fn is_port_listening(port: u16) -> bool {
-    match TcpStream::connect(("127.0.0.1", port)) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    TcpStream::connect(("127.0.0.1", port)).is_ok()
 }

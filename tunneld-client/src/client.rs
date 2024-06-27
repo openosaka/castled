@@ -42,7 +42,7 @@ impl<'a> Client<'a> {
     pub async fn run(&mut self, cancel: CancellationToken) -> Result<()> {
         let mut tasks = Vec::new();
         for tunnel in self.tunnels.iter() {
-            tasks.push(self.register_tcp(cancel.clone(), &tunnel));
+            tasks.push(self.register_tcp(cancel.clone(), tunnel));
         }
         let results = join_all(tasks).await;
 
