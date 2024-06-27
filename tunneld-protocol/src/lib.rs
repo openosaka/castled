@@ -2,13 +2,6 @@ pub mod pb {
 	tonic::include_proto!("message");
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-
-//     #[test]
-//     fn it_works() {
-//         let result = add(2, 2);
-//         assert_eq!(result, 4);
-//     }
-// }
+// before connectrpc releases rust version, we validate the message by ourselves
+// refer: https://github.com/connectrpc
+pub mod validate;

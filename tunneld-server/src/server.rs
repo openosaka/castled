@@ -1,22 +1,20 @@
 use std::sync::Arc;
 use std::{net::ToSocketAddrs, pin::Pin};
 
-use crate::validate::validate_register_req;
-use crate::Config;
+use crate::{manager, Config};
 use anyhow::Context as _;
 use uuid::Uuid;
 use core::task::{Context, Poll};
 use dashmap::DashMap;
 use futures::StreamExt;
-use tokio::io::{self, AsyncWriteExt};
 use tokio::sync::oneshot;
-use tokio::{net::TcpListener, select, sync::mpsc};
+use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
 use tracing::{debug, error, warn};
 use tunneld_pkg::event;
-use tunneld_pkg::io::{StreamingReader, StreamingWriter, VecWrapper};
+use tunneld_protocol::validate::validate_register_req;
 use tunneld_protocol::pb::{
     control::Payload,
     tunnel::Config::Tcp,
@@ -109,7 +107,9 @@ impl Server {
 
         let (event_tx, event_rx) = mpsc::channel(1024);
         let handler = Handler::new(event_tx);
-        self.manage_listeners(event_rx);
+        tokio::spawn(async move {
+            manager::TcpManager::new().handle_listeners(event_rx).await;
+        });
 
         let parent_cancel = cancel.clone();
         let server_cancel = self.close.clone();
@@ -309,86 +309,6 @@ impl TunnelService for Handler {
             Box::pin(response_streaming) as self::DataStream
         ))
     }
-}
-
-impl Server {
-    fn manage_listeners(&self, mut receiver: mpsc::Receiver<event::Event>) {
-        tokio::spawn(async move {
-            while let Some(event) = receiver.recv().await {
-                match event.payload {
-                    event::Payload::TcpRegister {
-                        port,
-                        cancel,
-                        new_connection_sender,
-                    } => match create_listener(port).await {
-                        Ok(listener) => {
-                            tokio::spawn(async move {
-                                loop {
-                                    select! {
-                                        _ = cancel.cancelled() => {
-                                            return;
-                                        }
-                                        result = listener.accept() => {
-                                            let (stream, addr) = result.unwrap();
-                                            let connection_id = Uuid::new_v4().to_string();
-                                            let (data_channel, mut data_channel_rx) = mpsc::channel(1024);
-                                            debug!("new user connection {} from: {:?}", connection_id, addr);
-
-                                            let event = event::Connection{
-                                                id: connection_id,
-                                                channel: data_channel.clone(),
-                                            };
-                                            new_connection_sender.send(event).await.unwrap();
-                                            let data_sender = data_channel_rx.recv().await.context("failed to receive data_sender").unwrap();
-                                            let data_sender = {
-                                                match data_sender {
-                                                    event::ConnectionChannelDataType::DataSender(sender) => sender,
-                                                    _ => panic!("we expect to receive DataSender from data_channel_rx at the first time."),
-                                                }
-                                            };
-
-                                            tokio::spawn(async move {
-                                                let (mut remote_reader, mut remote_writer) = stream.into_split();
-                                                let wrapper = VecWrapper::<Vec<u8>>::new();
-                                                let mut tunnel_writer = StreamingWriter::new(data_sender, wrapper);
-                                                let mut tunnel_reader = StreamingReader::new(data_channel_rx); // we expect to receive data from data_channel_rx after the first time.
-                                                let remote_to_me_to_tunnel = async {
-                                                    io::copy(&mut remote_reader, &mut tunnel_writer).await.unwrap();
-                                                    tunnel_writer.shutdown().await.context("failed to shutdown tunnel writer").unwrap();
-                                                };
-                                                let tunnel_to_me_to_remove = async {
-                                                    io::copy(&mut tunnel_reader, &mut remote_writer).await.unwrap();
-                                                    remote_writer.shutdown().await.context("failed to shutdown remote writer").unwrap();
-                                                };
-                                                tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remove);
-                                            });
-                                        }
-                                    }
-                                }
-                            });
-                            event.resp.send(None).unwrap(); // success
-                        }
-                        Err(status) => {
-                            event.resp.send(Some(status)).unwrap();
-                        }
-                    },
-                }
-            }
-        });
-    }
-}
-
-async fn create_listener(port: u16) -> Result<TcpListener, Status> {
-    TcpListener::bind(("0.0.0.0", port))
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::AddrInUse => Status::already_exists("port already in use"),
-            std::io::ErrorKind::PermissionDenied => Status::permission_denied("permission denied"),
-            _ => {
-                error!("failed to bind port: {}", err);
-                Status::internal("failed to bind port")
-            }
-        })
 }
 
 #[cfg(test)]

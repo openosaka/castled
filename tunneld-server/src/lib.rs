@@ -14,6 +14,6 @@ pub struct Config {
     pub domain: String,
 }
 
-mod validate;
+mod manager;
 mod server;
 pub use server::*;

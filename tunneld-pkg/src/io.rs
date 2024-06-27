@@ -121,7 +121,6 @@ impl WriteDataWrapper<TrafficToServer> for TrafficToServerWrapper {
             connection_id: self.connection_id.clone(),
             action: traffic_to_server::Action::Sending as i32,
             data: buf.to_vec(),
-            ..Default::default()
         }
     }
 

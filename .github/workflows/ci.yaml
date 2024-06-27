@@ -14,7 +14,11 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install Protoc
       uses: arduino/setup-protoc@v3
+    - name: Clippy
+      run: cargo clippy -- -D warnings
     - name: Build
       run: cargo build --verbose
-    - name: Run tests
+    - name: Run unit tests
       run: cargo test --verbose
+    - name: Run e2e
+      run: bash ./tests/e2e/test_tcp.sh
