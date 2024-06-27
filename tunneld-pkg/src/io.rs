@@ -72,10 +72,7 @@ pub trait WriteDataWrapper<T>: Send {
 }
 
 impl<T: Send> StreamingWriter<T> {
-    pub fn new(
-        sender: Sender<T>,
-        wrapper: Box<dyn WriteDataWrapper<T>>,
-    ) -> Self {
+    pub fn new(sender: Sender<T>, wrapper: Box<dyn WriteDataWrapper<T>>) -> Self {
         Self {
             sender: PollSender::new(sender),
             wrapper,
@@ -132,7 +129,6 @@ impl WriteDataWrapper<TrafficToServer> for TrafficToServerWrapper {
         }
     }
 }
-
 
 macro_rules! generate_async_write_impl {
     ($type:ty) => {

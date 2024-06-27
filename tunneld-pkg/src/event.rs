@@ -10,6 +10,7 @@ pub struct Event {
 pub enum Payload {
 	TcpRegister{
 		port: u16,
+		// when the tunneld-client exit, the server will cancel the listener.
 		cancel: CancellationToken,
 		new_connection_sender: mpsc::Sender<Connection>,
 	},
@@ -23,6 +24,9 @@ pub struct Connection {
 	// 2. when the server receives `Sending` from `data` streaming,
 	// the server will send `Data` through this channel.
     pub channel: mpsc::Sender<ConnectionChannelDataType>,
+	// when the server receives `Close` action from `data` streaming,
+	// the server will cancel the connection.
+	pub cancel: CancellationToken,
 }
 
 pub enum ConnectionChannelDataType {

@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use anyhow::{Context, Result};
 use futures::future::join_all;
 use tokio::{
-    io::{self, AsyncWriteExt},
+    io::{self, AsyncRead, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
     sync::mpsc,
 };
@@ -189,11 +189,12 @@ async fn handle_work_traffic(
     // rpc_client sends the data from reading the streaming_rx
     let (streaming_tx, streaming_rx) = mpsc::channel::<TrafficToServer>(1024);
     let streaming_to_server = ReceiverStream::new(streaming_rx);
+    let connection_id = connection_id.to_string();
 
     // the first message to notify the server this connection is started to send data
     streaming_tx
         .send(TrafficToServer {
-            connection_id: connection_id.to_string(),
+            connection_id: connection_id.clone(),
             action: traffic_to_server::Action::Start as i32,
             ..Default::default()
         })
@@ -210,18 +211,46 @@ async fn handle_work_traffic(
             .await
             .unwrap()
             .into_inner();
-        while let Some(traffic) = streaming_response.next().await {
-            transfer_tx.send(traffic.unwrap()).await.unwrap();
+
+        loop {
+            tokio::select! {
+                Some(traffic) = streaming_response.next() => {
+                    transfer_tx.send(traffic.unwrap()).await.unwrap();
+                }
+                _ = transfer_tx.closed() => {
+                    break;
+                }
+            }
         }
     });
 
-    let wrapper = TrafficToServerWrapper::new(connection_id.to_string());
-    let writer = StreamingWriter::new(streaming_tx, wrapper);
-    tokio::spawn(forward_traffic_to_local(
-        local_port,
-        writer,
-        StreamingReader::new(transfer_rx),
-    ));
+    let wrapper = TrafficToServerWrapper::new(connection_id.clone());
+    let writer = StreamingWriter::new(streaming_tx.clone(), wrapper);
+    tokio::spawn(async move {
+        let local_conn = TcpStream::connect(format!("0.0.0.0:{}", local_port)).await;
+        if local_conn.is_err() {
+            error!("failed to connect to local port {}, so let's notify the server to close the user connection", local_port);
+
+            streaming_tx
+                .send(TrafficToServer {
+                    connection_id: connection_id.to_string(),
+                    action: traffic_to_server::Action::Close as i32,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            return;
+        }
+        let mut local_conn = local_conn.unwrap();
+        let (local_r, local_w) = local_conn.split();
+
+        if let Err(err) =
+            forward_traffic_to_local(local_r, local_w, StreamingReader::new(transfer_rx), writer)
+                .await
+        {
+            debug!("failed to forward traffic to local: {:?}", err);
+        }
+    });
 
     Ok(())
 }
@@ -235,28 +264,34 @@ async fn handle_work_traffic(
 /// 1. remote <=> me
 /// 2. me     <=> local
 async fn forward_traffic_to_local(
-    local_port: u16,
-    mut remote_w: StreamingWriter<TrafficToServer>,
+    mut local_r: impl AsyncRead + Unpin,
+    mut local_w: impl AsyncWrite + Unpin,
     mut remote_r: StreamingReader<TrafficToClient>,
+    mut remote_w: StreamingWriter<TrafficToServer>,
 ) -> Result<()> {
-    let mut local_conn = TcpStream::connect(format!("0.0.0.0:{}", local_port))
-        .await
-        .context("failed to connect to local")?;
-    let (mut local_r, mut local_w) = local_conn.split();
-
     let remote_to_me_to_local = async {
         // read from remote, write to local
-        if let Ok(n) = io::copy(&mut remote_r, &mut local_w).await {
-            debug!("copied {} bytes from remote to local", n);
-            let _ = local_w.shutdown().await;
+        match io::copy(&mut remote_r, &mut local_w).await {
+            Ok(n) => {
+                debug!("copied {} bytes from remote to local", n);
+                let _ = local_w.shutdown().await;
+            }
+            Err(err) => {
+                error!("failed to copy from remote to local: {:?}", err)
+            }
         }
     };
 
     let local_to_me_to_remote = async {
         // read from local, write to remote
-        if let Ok(n) = io::copy(&mut local_r, &mut remote_w).await {
-            debug!("copied {} bytes from local to remote", n);
-            let _ = remote_w.shutdown().await;
+        match io::copy(&mut local_r, &mut remote_w).await {
+            Ok(n) => {
+                debug!("copied {} bytes from local to remote", n);
+                let _ = remote_w.shutdown().await;
+            }
+            Err(err) => {
+                error!("failed to copy from local to remote: {:?}", err)
+            }
         }
     };
 

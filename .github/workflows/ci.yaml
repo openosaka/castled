@@ -21,4 +21,6 @@ jobs:
     - name: Run unit tests
       run: cargo test --verbose
     - name: Run e2e
-      run: bash ./tests/e2e/test_tcp.sh
+      run: |
+        bash ./tests/e2e/test_basic_tcp.sh
+        bash ./tests/e2e/test_tcp_local_server_not_start.sh
