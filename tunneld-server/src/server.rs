@@ -9,7 +9,6 @@ use core::task::{Context, Poll};
 use dashmap::DashMap;
 use futures::StreamExt;
 use tokio::io::{self, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::{net::TcpListener, select, sync::mpsc};
 use tokio_stream::{wrappers::ReceiverStream, Stream};

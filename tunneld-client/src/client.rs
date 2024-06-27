@@ -11,7 +11,7 @@ use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 use tracing::{debug, error};
-use tunneld_pkg::io::{StreamingReader, StreamingWriter, TrafficToServerWrapper, WriteDataWrapper};
+use tunneld_pkg::io::{StreamingReader, StreamingWriter, TrafficToServerWrapper};
 use tunneld_protocol::pb::{
     control::Payload,
     traffic_to_server,
