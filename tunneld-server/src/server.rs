@@ -212,6 +212,9 @@ impl TunnelService for Handler {
         let server_closed = self.close.clone();
         tokio::spawn(async move {
             server_closed.cancelled().await;
+            // TODO(sword): not sure why the graceful shutdown doesn't work,
+            // so we have to close the outbound streaming channel manually 
+            // by sending an error message to the client.
             outbound_streaming_closer
                 .send(Err(Status::unavailable("server is closing")))
                 .await

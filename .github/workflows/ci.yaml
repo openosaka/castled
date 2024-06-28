@@ -18,9 +18,13 @@ jobs:
       run: cargo clippy -- -D warnings
     - name: Build
       run: cargo build --verbose
-    - name: Run unit tests
-      run: cargo test --verbose
+    - name: cargo test --locked
+      run: cargo test --locked --all-features --all-targets
+    # https://github.com/rust-lang/cargo/issues/6669
+    - name: cargo test --doc
+      run: cargo test --locked --all-features --doc
     - name: Run e2e
       run: |
         bash ./tests/e2e/test_basic_tcp.sh
         bash ./tests/e2e/test_tcp_local_server_not_start.sh
+        bash ./tests/e2e/test_close_server_gracefully.sh
