@@ -195,7 +195,6 @@ impl TunnelService for Handler {
             tokio::spawn(async move {
                 // receive new connections
                 while let Some(connection) = new_connection_rx.recv().await {
-                    debug!("new user connection: {}", connection.id);
                     let connection_id = connection.id.to_string();
                     connections.insert(connection.id.clone(), connection);
                     tx.send(Ok(Control {
@@ -256,9 +255,7 @@ impl TunnelService for Handler {
                                 let (transfer_tx, mut transfer_rx) = mpsc::channel(1024);
                                 connection
                                     .channel
-                                    .send(event::ConnectionChannelDataType::DataSender(
-                                        transfer_tx,
-                                    ))
+                                    .send(event::ConnectionChannelDataType::DataSender(transfer_tx))
                                     .await
                                     .context("failed to send streaming_tx to data_sender_sender")
                                     .unwrap();
@@ -299,13 +296,10 @@ impl TunnelService for Handler {
                                 connections.remove(&connection_id);
                             }
                             Ok(traffic_to_server::Action::Close) => {
-                                debug!(
-                                    "client closed streaming, connection_id: {}",
-                                    connection_id
-                                );
+                                debug!("client closed streaming, connection_id: {}", connection_id);
+                                // notify tcp manager to close the user connection
                                 connection.cancel.cancel();
                                 connections.remove(&connection_id);
-                                // notify tcp manager to close the user connection
                                 break;
                             }
                             Err(_) => {

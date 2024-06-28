@@ -32,7 +32,9 @@ impl TcpManager {
                     Ok(listener) => {
                         let this = Arc::clone(&this);
                         spawn(async move {
-                            this.handle_listener(listener, cancel, new_connection_sender).await;
+                            this.handle_listener(listener, cancel, new_connection_sender)
+                                .await;
+                            debug!("tcp listener on {} closed", port);
                         });
                         event.resp.send(None).unwrap(); // success
                     }
@@ -43,7 +45,7 @@ impl TcpManager {
             }
         }
 
-		debug!("tcp manager quit");
+        debug!("tcp manager quit");
     }
 
     async fn handle_listener(
@@ -58,7 +60,7 @@ impl TcpManager {
                     return;
                 }
                 result = listener.accept() => {
-                    let ( stream, addr) = result.unwrap();
+                    let (stream, addr) = result.unwrap();
                     let connection_id = Uuid::new_v4().to_string();
                     let (data_channel, mut data_channel_rx) = mpsc::channel(1024);
                     debug!("new user connection {} from: {:?}", connection_id, addr);
@@ -80,8 +82,8 @@ impl TcpManager {
                         }
                     };
 
-                    let (mut remote_reader, mut remote_writer) = stream.into_split();
                     tokio::spawn(async move {
+                        let (mut remote_reader, mut remote_writer) = stream.into_split();
                         let wrapper = VecWrapper::<Vec<u8>>::new();
                         let mut tunnel_writer = StreamingWriter::new(data_sender, wrapper);
                         let mut tunnel_reader = StreamingReader::new(data_channel_rx); // we expect to receive data from data_channel_rx after the first time.
@@ -97,7 +99,10 @@ impl TcpManager {
                         tokio::select! {
                             _ = async { tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remove) } => {}
                             _ = cancel.cancelled() => {
-                                debug!("connection {} closed", connection_id);
+                                debug!("closing connection {}", connection_id);
+                                let _ = remote_writer.shutdown().await;
+                                let _ = tunnel_writer.shutdown().await;
+                                debug!("closed connection {}", connection_id);
                             }
                         }
                     });

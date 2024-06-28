@@ -88,68 +88,63 @@ impl<'a> Client<'a> {
         loop {
             tokio::select! {
                 result = control_stream.next() => {
-                    match result {
-                        Some(result) => {
-                            match result {
-                                Ok(control) => {
-                                    match Command::try_from(control.command) {
-                                        Ok(Command::Init) => {
-                                            if initialized {
-                                                error!("received duplicate init command");
-                                                continue;
-                                            }
-                                            match control.payload {
-                                                Some(Payload::Init(init)) => {
-                                                    initialized = true;
-                                                    debug!("received init command, tunnel initialized with id {}", init.tunnel_id);
-                                                }
-                                                Some(Payload::Work(_)) => {
-                                                    error!("unexpected work command");
-                                                    continue;
-                                                }
-                                                None => {
-                                                    error!("missing payload in init command");
-                                                    continue;
-                                                }
-                                            }
-                                        },
-                                        Ok(Command::Work) => {
-                                            if !initialized {
-                                                error!("received work command before init command");
-                                                continue;
-                                            }
-                                            match control.payload {
-                                                Some(Payload::Init(_)) => {
-                                                    error!("unexpected init command");
-                                                    continue;
-                                                }
-                                                Some(Payload::Work(work)) => {
-                                                    debug!("received work command, starting to forward traffic");
-                                                    if let Err(e) = handle_work_traffic(rpc_client.clone() /* cheap clone operation */, &work.connection_id, tcp.local_port).await {
-                                                        error!("failed to handle work traffic: {:?}", e);
-                                                        continue;
-                                                    }
-                                                }
-                                                None => {
-                                                    error!("missing payload in work command");
-                                                    continue;
-                                                }
-                                            }
-                                        },
-                                        _ => {
-                                            error!("unexpected command: {:?}", control.command);
-                                        }
-                                    }
-                                },
-                                Err(e) => {
-                                    error!("received error: {:?}", e);
-                                },
+                    if result.is_none() {
+                        debug!("control stream closed");
+                        break;
+                    }
+                    let result = result.unwrap();
+                    if result.is_err() {
+                        error!("failed to receive control message: {:?}", result);
+                        break;
+                    }
+                    let control = result.unwrap();
+                    match Command::try_from(control.command) {
+                        Ok(Command::Init) => {
+                            if initialized {
+                                error!("received duplicate init command");
+                                break;
                             }
-                        },
-                        None => {
-                            debug!("control stream ended");
+                            match control.payload {
+                                Some(Payload::Init(init)) => {
+                                    initialized = true;
+                                    debug!("received init command, tunnel initialized with id {}", init.tunnel_id);
+                                    continue; // the only path to success.
+                                }
+                                Some(Payload::Work(_)) => {
+                                    error!("unexpected work command");
+                                }
+                                None => {
+                                    error!("missing payload in init command");
+                                }
+                            }
                             break;
                         },
+                        Ok(Command::Work) => {
+                            if !initialized {
+                                error!("received work command before init command");
+                                break;
+                            }
+                            match control.payload {
+                                Some(Payload::Init(_)) => {
+                                    error!("unexpected init command");
+                                }
+                                Some(Payload::Work(work)) => {
+                                    debug!("received work command, starting to forward traffic");
+                                    if let Err(e) = handle_work_traffic(rpc_client.clone() /* cheap clone operation */, &work.connection_id, tcp.local_port).await {
+                                        error!("failed to handle work traffic: {:?}", e);
+                                    } else {
+                                        continue; // the only path to success.
+                                    }
+                                }
+                                None => {
+                                    error!("missing payload in work command");
+                                }
+                            }
+                            break;
+                        },
+                        _ => {
+                            error!("unexpected command: {:?}", control.command);
+                        }
                     }
                 }
                 _ = cancel.cancelled() => {
@@ -238,6 +233,7 @@ async fn handle_work_traffic(
                     ..Default::default()
                 })
                 .await
+                .context("terrible, the server may be crashed")
                 .unwrap();
             return;
         }
