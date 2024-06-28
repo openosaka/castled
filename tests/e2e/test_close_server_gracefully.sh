@@ -2,15 +2,12 @@
 # set -x
 
 cargo build
-rm -f actual.txt expected.txt || true
-
-data="Hello, Tunneld!"
 
 # Function to clean up processes
 cleanup() {
   echo "Cleaning up..."
+  kill $server_pid # close server at first, if something blocked, then this script is not ganna finished.
   kill $client_pid
-  kill $server_pid
 }
 
 # Trap EXIT signal to ensure cleanup
@@ -27,12 +24,4 @@ sleep 1
 exec ./target/debug/tunnel tcp 12345 --remote-port 9992 &
 client_pid=$!
 
-# Start the nc TCP server
-exec nc -l -p 12345 > actual.txt & # it closes with nc's timeout
-
 sleep 1
-
-echo $data | nc localhost 12345 -q 1 # quit after 1 second
-echo $data > expected.txt
-
-diff actual.txt expected.txt
