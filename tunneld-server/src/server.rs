@@ -131,7 +131,6 @@ impl TunnelService for Handler {
         }
 
         let (outbound_streaming_tx, outbound_streaming_rx) = mpsc::channel(1024);
-        let outbound_streaming_closer = outbound_streaming_tx.clone();
         let tenant_id = Uuid::new_v4();
         let init_command = Control {
             command: Command::Init as i32,
@@ -152,6 +151,7 @@ impl TunnelService for Handler {
         let cancel_listener_w = CancellationToken::new();
         let cancel_listener = cancel_listener_w.clone();
         let event_tx = self.event_tx.clone();
+        let server_closed = self.close.clone();
 
         // TODO(sword): support more tunnel types
         // let's assume it's a TCP tunnel for now
@@ -190,36 +190,32 @@ impl TunnelService for Handler {
 
             let connections = self.connections.clone();
             tokio::spawn(async move {
-                // receive new connections
-                while let Some(connection) = new_connection_rx.recv().await {
-                    let connection_id = connection.id.to_string();
-                    connections.insert(connection.id.clone(), connection);
-                    outbound_streaming_tx
-                        .send(Ok(Control {
-                            command: Command::Work as i32,
-                            payload: Some(Payload::Work(WorkPayload { connection_id })),
-                        }))
-                        .await
-                        .context("failed to send work command")
-                        .unwrap();
+                loop {
+                    tokio::select! {
+                            _ = server_closed.cancelled() => {
+                                debug!("server closed, close the control stream");
+                                break;
+                            }
+                            Some(connection) = new_connection_rx.recv() => {
+                                // receive new connections
+                                let connection_id = connection.id.to_string();
+                                connections.insert(connection.id.clone(), connection);
+                                outbound_streaming_tx
+                                    .send(Ok(Control {
+                                        command: Command::Work as i32,
+                                        payload: Some(Payload::Work(WorkPayload { connection_id })),
+                                    }))
+                                    .await
+                                    .context("failed to send work command")
+                                    .unwrap();
+                            }
+                        }
                 }
                 warn!("todo(sword): release connection");
             });
         } else {
             unimplemented!("only support TCP tunnel for now")
         }
-
-        let server_closed = self.close.clone();
-        tokio::spawn(async move {
-            server_closed.cancelled().await;
-            // TODO(sword): not sure why the graceful shutdown doesn't work,
-            // so we have to close the outbound streaming channel manually 
-            // by sending an error message to the client.
-            outbound_streaming_closer
-                .send(Err(Status::unavailable("server is closing")))
-                .await
-                .unwrap();
-        });
 
         let control_stream = Box::pin(CancelableReceiver::new(
             cancel_listener_w,
