@@ -148,7 +148,7 @@ impl<'a> Client<'a> {
                     }
                 }
                 _ = cancel.cancelled() => {
-                    debug!("canceling tcp tunnel");
+                    debug!("cancelling tcp tunnel");
                     return Ok(());
                 }
             }

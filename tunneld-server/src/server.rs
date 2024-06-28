@@ -26,15 +26,17 @@ use uuid::Uuid;
 pub struct Handler {
     event_tx: mpsc::Sender<event::Event>,
     connections: Arc<DashMap<String, event::Connection>>,
+    close: CancellationToken,
 
     _priv: (),
 }
 
 impl Handler {
-    pub fn new(event_tx: mpsc::Sender<event::Event>) -> Self {
+    pub fn new(close: CancellationToken, event_tx: mpsc::Sender<event::Event>) -> Self {
         Self {
             connections: Arc::new(DashMap::new()),
             event_tx,
+            close,
             _priv: (),
         }
     }
@@ -81,20 +83,16 @@ impl<T> Drop for CancelableReceiver<T> {
 pub struct Server {
     config: Config,
     server: GrpcServer,
-    close: CancellationToken,
 }
 
 impl Server {
     /// Create a new server instance.
     pub fn new(config: Config) -> Self {
-        let server = GrpcServer::builder();
-        let close = CancellationToken::new();
+        let server = GrpcServer::builder()
+            .http2_keepalive_interval(Some(tokio::time::Duration::from_secs(60)))
+            .http2_keepalive_timeout(Some(tokio::time::Duration::from_secs(3)));
 
-        Self {
-            config,
-            server,
-            close,
-        }
+        Self { config, server }
     }
 
     pub async fn run(&mut self, cancel: CancellationToken) -> anyhow::Result<()> {
@@ -106,16 +104,10 @@ impl Server {
             .unwrap();
 
         let (event_tx, event_rx) = mpsc::channel(1024);
-        let handler = Handler::new(event_tx);
+
+        let handler = Handler::new(cancel.clone(), event_tx);
         tokio::spawn(async move {
             manager::TcpManager::new().handle_listeners(event_rx).await;
-        });
-
-        let parent_cancel = cancel.clone();
-        let server_cancel = self.close.clone();
-        tokio::spawn(async move {
-            parent_cancel.cancelled().await;
-            server_cancel.cancel(); // cancel myself.
         });
 
         debug!("starting server on: {}", addr);
@@ -138,7 +130,8 @@ impl TunnelService for Handler {
             return Err(status);
         }
 
-        let (tx, rx) = mpsc::channel(1024);
+        let (outbound_streaming_tx, outbound_streaming_rx) = mpsc::channel(1024);
+        let outbound_streaming_closer = outbound_streaming_tx.clone();
         let tenant_id = Uuid::new_v4();
         let init_command = Control {
             command: Command::Init as i32,
@@ -148,10 +141,13 @@ impl TunnelService for Handler {
                 assigned_entrypoint: "todo".to_string(),
             })),
         };
-        tx.send(Ok(init_command)).await.map_err(|err| {
-            error!("failed to send control stream: {}", err);
-            Status::internal("failed to send control stream")
-        })?;
+        outbound_streaming_tx
+            .send(Ok(init_command))
+            .await
+            .map_err(|err| {
+                error!("failed to send control stream: {}", err);
+                Status::internal("failed to send control stream")
+            })?;
 
         let cancel_listener_w = CancellationToken::new();
         let cancel_listener = cancel_listener_w.clone();
@@ -182,10 +178,11 @@ impl TunnelService for Handler {
                     debug!("listener created on port: {}", remote_port);
                 }
                 Ok(Some(status)) => {
-                    tx.send(Err(status)).await.unwrap();
+                    outbound_streaming_tx.send(Err(status)).await.unwrap();
                 }
                 Err(_err) => {
-                    tx.send(Err(Status::internal("failed to create lister")))
+                    outbound_streaming_tx
+                        .send(Err(Status::internal("failed to create lister")))
                         .await
                         .unwrap();
                 }
@@ -197,13 +194,14 @@ impl TunnelService for Handler {
                 while let Some(connection) = new_connection_rx.recv().await {
                     let connection_id = connection.id.to_string();
                     connections.insert(connection.id.clone(), connection);
-                    tx.send(Ok(Control {
-                        command: Command::Work as i32,
-                        payload: Some(Payload::Work(WorkPayload { connection_id })),
-                    }))
-                    .await
-                    .context("failed to send work command")
-                    .unwrap();
+                    outbound_streaming_tx
+                        .send(Ok(Control {
+                            command: Command::Work as i32,
+                            payload: Some(Payload::Work(WorkPayload { connection_id })),
+                        }))
+                        .await
+                        .context("failed to send work command")
+                        .unwrap();
                 }
                 warn!("todo(sword): release connection");
             });
@@ -211,8 +209,19 @@ impl TunnelService for Handler {
             unimplemented!("only support TCP tunnel for now")
         }
 
-        let control_stream =
-            Box::pin(CancelableReceiver::new(cancel_listener_w, rx)) as self::RegisterStream;
+        let server_closed = self.close.clone();
+        tokio::spawn(async move {
+            server_closed.cancelled().await;
+            outbound_streaming_closer
+                .send(Err(Status::unavailable("server is closing")))
+                .await
+                .unwrap();
+        });
+
+        let control_stream = Box::pin(CancelableReceiver::new(
+            cancel_listener_w,
+            outbound_streaming_rx,
+        )) as self::RegisterStream;
         Ok(Response::new(control_stream))
     }
 
@@ -226,90 +235,94 @@ impl TunnelService for Handler {
         let mut inbound_stream = req.into_inner();
         let (outbound_tx, outbound_rx) = mpsc::channel(1024);
 
+        let server_closed = self.close.clone();
         tokio::spawn(async move {
             let mut started = false;
-            while let Some(traffic) = inbound_stream.next().await {
-                match traffic {
-                    Ok(traffic) => {
-                        let connection_id = traffic.connection_id;
-                        let connection = connections
-                            .get(&connection_id)
-                            .context("connection not found")
-                            .unwrap();
-                        let connection = connection.value();
-
-                        use std::convert::TryFrom;
-                        match traffic_to_server::Action::try_from(traffic.action) {
-                            Ok(traffic_to_server::Action::Start) => {
-                                debug!(
-                                    "received start action from connection {}, I am gonna start streaming",
-                                    connection_id,
-                                );
-                                if started {
-                                    error!("duplicate start action");
-                                    return;
-                                }
-                                started = true;
-
-                                // we read data from transfer_rx, then forward the data to outbound_tx
-                                let (transfer_tx, mut transfer_rx) = mpsc::channel(1024);
-                                connection
-                                    .channel
-                                    .send(event::ConnectionChannelDataType::DataSender(transfer_tx))
-                                    .await
-                                    .context("failed to send streaming_tx to data_sender_sender")
+            loop {
+                tokio::select! {
+                    _ = server_closed.cancelled() => {/* quit */}
+                    Some(traffic) = inbound_stream.next() => {
+                        match traffic {
+                            Ok(traffic) => {
+                                let connection_id = traffic.connection_id;
+                                let connection = connections
+                                    .get(&connection_id)
+                                    .context("connection not found")
                                     .unwrap();
-                                let outbound_tx = outbound_tx.clone();
-                                tokio::spawn(async move {
-                                    loop {
-                                        tokio::select! {
-                                            Some(data) = transfer_rx.recv() => {
-                                                outbound_tx
-                                                    .send(Ok(TrafficToClient { data }))
-                                                    .await
-                                                    .context("failed to send traffic to outbound channel")
-                                                    .unwrap();
-                                            }
-                                            _ = outbound_tx.closed() => {
-                                                break
-                                            }
+                                let connection = connection.value();
+
+                                use std::convert::TryFrom;
+                                match traffic_to_server::Action::try_from(traffic.action) {
+                                    Ok(traffic_to_server::Action::Start) => {
+                                        debug!(
+                                            "received start action from connection {}, I am gonna start streaming",
+                                            connection_id,
+                                        );
+                                        if started {
+                                            error!("duplicate start action");
+                                            return;
                                         }
+                                        started = true;
+
+                                        // we read data from transfer_rx, then forward the data to outbound_tx
+                                        let (transfer_tx, mut transfer_rx) = mpsc::channel(1024);
+                                        connection
+                                            .channel
+                                            .send(event::ConnectionChannelDataType::DataSender(transfer_tx))
+                                            .await
+                                            .context("failed to send streaming_tx to data_sender_sender")
+                                            .unwrap();
+                                        let outbound_tx = outbound_tx.clone();
+                                        tokio::spawn(async move {
+                                            loop {
+                                                tokio::select! {
+                                                    Some(data) = transfer_rx.recv() => {
+                                                        outbound_tx
+                                                            .send(Ok(TrafficToClient { data }))
+                                                            .await
+                                                            .context("failed to send traffic to outbound channel")
+                                                            .unwrap();
+                                                    }
+                                                    _ = outbound_tx.closed() => {
+                                                        break
+                                                    }
+                                                }
+                                            }
+                                        });
                                     }
-                                });
+                                    Ok(traffic_to_server::Action::Sending) => {
+                                        debug!(
+                                            "client is sending traffic, connection_id: {}",
+                                            connection_id
+                                        );
+                                        connection
+                                            .channel
+                                            .send(event::ConnectionChannelDataType::Data(traffic.data))
+                                            .await
+                                            .unwrap();
+                                    }
+                                    Ok(traffic_to_server::Action::Finished) => {
+                                        debug!(
+                                            "client finished sending traffic, connection_id: {}",
+                                            connection_id
+                                        );
+                                        connections.remove(&connection_id);
+                                    }
+                                    Ok(traffic_to_server::Action::Close) => {
+                                        debug!("client closed streaming, connection_id: {}", connection_id);
+                                        // notify tcp manager to close the user connection
+                                        connection.cancel.cancel();
+                                        connections.remove(&connection_id);
+                                    }
+                                    Err(_) => {
+                                        error!("invalid traffic action: {}", traffic.action);
+                                    }
+                                }
                             }
-                            Ok(traffic_to_server::Action::Sending) => {
-                                debug!(
-                                    "client is sending traffic, connection_id: {}",
-                                    connection_id
-                                );
-                                connection
-                                    .channel
-                                    .send(event::ConnectionChannelDataType::Data(traffic.data))
-                                    .await
-                                    .unwrap();
-                            }
-                            Ok(traffic_to_server::Action::Finished) => {
-                                debug!(
-                                    "client finished sending traffic, connection_id: {}",
-                                    connection_id
-                                );
-                                connections.remove(&connection_id);
-                            }
-                            Ok(traffic_to_server::Action::Close) => {
-                                debug!("client closed streaming, connection_id: {}", connection_id);
-                                // notify tcp manager to close the user connection
-                                connection.cancel.cancel();
-                                connections.remove(&connection_id);
-                                break;
-                            }
-                            Err(_) => {
-                                error!("invalid traffic action: {}", traffic.action);
-                                return;
+                            Err(err) => {
+                                error!("failed to receive traffic: {}", err);
                             }
                         }
-                    }
-                    Err(err) => {
-                        error!("failed to receive traffic: {}", err);
                     }
                 }
             }
