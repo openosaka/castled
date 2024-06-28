@@ -6,8 +6,8 @@ cargo build
 # Function to clean up processes
 cleanup() {
   echo "Cleaning up..."
-  kill $client_pid
-  kill $server_pid
+  kill -SIGINT $client_pid
+  kill -SIGINT $server_pid
 }
 
 # Trap EXIT signal to ensure cleanup

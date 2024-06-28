@@ -2,15 +2,13 @@
 set -x
 
 cargo build
-rm -f actual.txt expected.txt || true
-
-data="Hello, Tunneld!"
 
 # Function to clean up processes
 cleanup() {
   echo "Cleaning up..."
-  kill -SIGINT $client_pid
   kill -SIGINT $server_pid
+  kill -SIGINT $client_pid
+  kill -SIGINT $http_server_pid
 }
 
 # Trap EXIT signal to ensure cleanup
@@ -24,15 +22,20 @@ server_pid=$!
 sleep 1
 
 # Start the tunnel client
-exec ./target/debug/tunnel tcp 12345 --remote-port 9992 &
+exec ./target/debug/tunnel tcp 8881 --remote-port 9992 &
 client_pid=$!
 
 # Start the nc TCP server
-exec nc -l -p 12345 > actual.txt & # it closes with nc's timeout
+exec python3 -m http.server 8881 > /dev/null 2>&1 &
+http_server_pid=$!
 
 sleep 1
 
-echo $data | nc localhost 9992 -q 1 # quit after 1 second
-echo $data > expected.txt
-
-diff actual.txt expected.txt
+for i in {1..10000}
+do
+  curl -s http://localhost:9992 > /dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo "Failed to connect to the tunnel server"
+    exit 1
+  fi
+done
