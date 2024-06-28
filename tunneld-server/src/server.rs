@@ -192,24 +192,24 @@ impl TunnelService for Handler {
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
-                            _ = server_closed.cancelled() => {
-                                debug!("server closed, close the control stream");
-                                break;
-                            }
-                            Some(connection) = new_connection_rx.recv() => {
-                                // receive new connections
-                                let connection_id = connection.id.to_string();
-                                connections.insert(connection.id.clone(), connection);
-                                outbound_streaming_tx
-                                    .send(Ok(Control {
-                                        command: Command::Work as i32,
-                                        payload: Some(Payload::Work(WorkPayload { connection_id })),
-                                    }))
-                                    .await
-                                    .context("failed to send work command")
-                                    .unwrap();
-                            }
+                        _ = server_closed.cancelled() => {
+                            debug!("server closed, close the control stream");
+                            break;
                         }
+                        Some(connection) = new_connection_rx.recv() => {
+                            // receive new connections
+                            let connection_id = connection.id.to_string();
+                            connections.insert(connection.id.clone(), connection);
+                            outbound_streaming_tx
+                                .send(Ok(Control {
+                                    command: Command::Work as i32,
+                                    payload: Some(Payload::Work(WorkPayload { connection_id })),
+                                }))
+                                .await
+                                .context("failed to send work command")
+                                .unwrap();
+                        }
+                    }
                 }
                 warn!("todo(sword): release connection");
             });
@@ -239,7 +239,7 @@ impl TunnelService for Handler {
             let mut started = false;
             loop {
                 tokio::select! {
-                    _ = server_closed.cancelled() => {/* quit */}
+                    _ = server_closed.cancelled() => { break }
                     Some(traffic) = inbound_stream.next() => {
                         match traffic {
                             Ok(traffic) => {

@@ -4,7 +4,7 @@ use anyhow::Context as _;
 use tokio::io::AsyncWriteExt; // for shutdown() method
 use tokio::{io, select, spawn, sync::mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, trace};
 use tunneld_pkg::{
     event,
     io::{StreamingReader, StreamingWriter, VecWrapper},
@@ -88,23 +88,28 @@ impl TcpManager {
                         let mut tunnel_writer = StreamingWriter::new(data_sender, wrapper);
                         let mut tunnel_reader = StreamingReader::new(data_channel_rx); // we expect to receive data from data_channel_rx after the first time.
                         let remote_to_me_to_tunnel = async {
+                            debug!("start to transfer data from remote to tunnel");
                             io::copy(&mut remote_reader, &mut tunnel_writer).await.unwrap();
                             tunnel_writer.shutdown().await.context("failed to shutdown tunnel writer").unwrap();
+                            debug!("finished the transfer between remote and tunnel");
                         };
-                        let tunnel_to_me_to_remove = async {
+                        let tunnel_to_me_to_remote = async {
+                            debug!("start to transfer data from tunnel to remote");
                             io::copy(&mut tunnel_reader, &mut remote_writer).await.unwrap();
                             remote_writer.shutdown().await.context("failed to shutdown remote writer").unwrap();
+                            debug!("finished the transfer between tunnel and remote");
                         };
 
                         tokio::select! {
-                            _ = async { tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remove) } => {}
+                            _ = async { tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remote) } => {
+                                debug!("finished the transfer between remote and tunnel");
+                            }
                             _ = cancel.cancelled() => {
-                                debug!("closing connection {}", connection_id);
                                 let _ = remote_writer.shutdown().await;
                                 let _ = tunnel_writer.shutdown().await;
-                                debug!("closed connection {}", connection_id);
                             }
                         }
+                        debug!("closed connection {}", connection_id);
                     });
                 }
             }
