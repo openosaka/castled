@@ -32,7 +32,10 @@ exec nc -l -p 12345 > actual.txt & # it closes with nc's timeout
 
 sleep 1
 
-echo $data | nc localhost 9992 -q 1 # quit after 1 second
+# quit after 1 second
+# TODO(sword): we don't require this timeout,
+# but our server has some bug, so have to quit by timeout now
+echo $data | timeout 1s nc localhost 9992 
 echo $data > expected.txt
 
 diff actual.txt expected.txt

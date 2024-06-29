@@ -249,6 +249,7 @@ impl TunnelService for Handler {
                                     .context("connection not found")
                                     .unwrap();
                                 let connection = connection.value();
+                                // TODO(sword): remove connection
 
                                 use std::convert::TryFrom;
                                 match traffic_to_server::Action::try_from(traffic.action) {
@@ -305,13 +306,11 @@ impl TunnelService for Handler {
                                             "client finished sending traffic, connection_id: {}",
                                             connection_id
                                         );
-                                        connections.remove(&connection_id);
                                     }
                                     Ok(traffic_to_server::Action::Close) => {
                                         debug!("client closed streaming, connection_id: {}", connection_id);
                                         // notify tcp manager to close the user connection
                                         connection.cancel.cancel();
-                                        connections.remove(&connection_id);
                                     }
                                     Err(_) => {
                                         error!("invalid traffic action: {}", traffic.action);
