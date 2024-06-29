@@ -1,5 +1,5 @@
 #!/bin/bash
-set -x
+# set -x
 
 cargo build
 rm -f actual.txt expected.txt || true

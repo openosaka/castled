@@ -9,7 +9,7 @@ use tokio_util::sync::PollSender;
 use tracing::debug;
 use tunneld_protocol::pb::{traffic_to_server, TrafficToClient, TrafficToServer};
 
-use crate::event::ConnectionChannelDataType;
+use crate::event::ConnChanDataType;
 
 pub struct StreamingReader<T> {
     receiver: mpsc::Receiver<T>,
@@ -38,7 +38,7 @@ impl tokio::io::AsyncRead for StreamingReader<TrafficToClient> {
     }
 }
 
-impl tokio::io::AsyncRead for StreamingReader<ConnectionChannelDataType> {
+impl tokio::io::AsyncRead for StreamingReader<ConnChanDataType> {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -47,10 +47,10 @@ impl tokio::io::AsyncRead for StreamingReader<ConnectionChannelDataType> {
         match ready!(self.receiver.poll_recv(cx)) {
             Some(data) => {
                 match data {
-                    ConnectionChannelDataType::DataSender(_) => {
+                    ConnChanDataType::DataSender(_) => {
                         panic!("we should not receive DataSender")
                     }
-                    ConnectionChannelDataType::Data(data) => {
+                    ConnChanDataType::Data(data) => {
                         buf.put_slice(data.as_slice());
                     }
                 }
