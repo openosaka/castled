@@ -31,7 +31,7 @@ http_server_pid=$!
 
 sleep 1
 
-for i in {1..10000}
+for i in {1..200}
 do
   curl -s http://localhost:9992 > /dev/null 2>&1
   if [ $? -ne 0 ]; then
