@@ -28,3 +28,4 @@ jobs:
         bash ./tests/e2e/test_basic_tcp.sh
         bash ./tests/e2e/test_tcp_local_server_not_start.sh
         bash ./tests/e2e/test_close_server_gracefully.sh
+        bash ./tests/e2e/test_tcp_with_tunnel_http_server.sh

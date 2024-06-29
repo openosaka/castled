@@ -11,7 +11,7 @@ use tokio::sync::oneshot;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 use tunneld_pkg::event;
 use tunneld_protocol::pb::{
     control::Payload,
@@ -199,6 +199,7 @@ impl TunnelService for Handler {
                         Some(connection) = conn_event_chan_rx.recv() => {
                             match connection {
                                 event::ConnEvent::Add(connection) => {
+                                    debug!("new user connection {}", connection.id);
                                     // receive new connection
                                     let connection_id = connection.id.to_string();
                                     connections.insert(connection.id.clone(), connection);
@@ -212,14 +213,13 @@ impl TunnelService for Handler {
                                         .unwrap();
                                 }
                                 event::ConnEvent::Remove(connection_id) => {
-                                    debug!("remove connection: {}", connection_id);
+                                    debug!("remove user connection: {}", connection_id);
                                     connections.remove(&connection_id);
                                 }
                             }
                         }
                     }
                 }
-                warn!("todo(sword): release connection");
             });
         } else {
             unimplemented!("only support TCP tunnel for now")
@@ -314,6 +314,7 @@ impl TunnelService for Handler {
                                             "client finished sending traffic, connection_id: {}",
                                             connection_id
                                         );
+                                        connection.chan.send(event::ConnChanDataType::Data(vec![])).await.unwrap();
                                     }
                                     Ok(traffic_to_server::Action::Close) => {
                                         debug!("client closed streaming, connection_id: {}", connection_id);
@@ -322,6 +323,7 @@ impl TunnelService for Handler {
                                     }
                                     Err(_) => {
                                         error!("invalid traffic action: {}", traffic.action);
+                                        connection.cancel.cancel();
                                     }
                                 }
                             }

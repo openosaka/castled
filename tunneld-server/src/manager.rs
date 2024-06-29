@@ -73,10 +73,9 @@ impl TcpManager {
                     if result.is_none() {
                         return;
                     }
-                    let (stream, addr) = result.unwrap();
+                    let (stream, _addr) = result.unwrap();
                     let connection_id = Uuid::new_v4().to_string();
                     let (data_channel, mut data_channel_rx) = mpsc::channel(1024);
-                    debug!("new user connection {} from: {:?}", connection_id, addr);
 
                     let cancel_w = CancellationToken::new();
                     let cancel = cancel_w.clone();
@@ -102,13 +101,11 @@ impl TcpManager {
                         let mut tunnel_writer = StreamingWriter::new(data_sender, wrapper);
                         let mut tunnel_reader = StreamingReader::new(data_channel_rx); // we expect to receive data from data_channel_rx after the first time.
                         let remote_to_me_to_tunnel = async {
-                            debug!("start to transfer data from remote to tunnel");
                             io::copy(&mut remote_reader, &mut tunnel_writer).await.unwrap();
                             tunnel_writer.shutdown().await.context("failed to shutdown tunnel writer").unwrap();
                             debug!("finished the transfer between remote and tunnel");
                         };
                         let tunnel_to_me_to_remote = async {
-                            debug!("start to transfer data from tunnel to remote");
                             io::copy(&mut tunnel_reader, &mut remote_writer).await.unwrap();
                             remote_writer.shutdown().await.context("failed to shutdown remote writer").unwrap();
                             debug!("finished the transfer between tunnel and remote");
@@ -116,20 +113,18 @@ impl TcpManager {
 
                         tokio::select! {
                             _ = async { tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remote) } => {
-                                debug!("finished the transfer");
+                                debug!("closing user connection {}", connection_id);
+                                conn_event_chan_for_removing
+                                    .send(event::ConnEvent::Remove(connection_id))
+                                    .await
+                                    .context("notify server to remove connection channel")
+                                    .unwrap();
                             }
                             _ = cancel.cancelled() => {
                                 let _ = remote_writer.shutdown().await;
                                 let _ = tunnel_writer.shutdown().await;
                             }
                         }
-
-                        debug!("closeing user connection {}", connection_id);
-                        conn_event_chan_for_removing
-                            .send(event::ConnEvent::Remove(connection_id))
-                            .await
-                            .context("notify server to remove connection channel")
-                            .unwrap();
                     });
                 }
             }
