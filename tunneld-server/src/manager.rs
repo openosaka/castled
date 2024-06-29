@@ -4,7 +4,7 @@ use anyhow::Context as _;
 use tokio::io::AsyncWriteExt; // for shutdown() method
 use tokio::{io, select, spawn, sync::mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace};
+use tracing::debug;
 use tunneld_pkg::{
     event,
     io::{StreamingReader, StreamingWriter, VecWrapper},
