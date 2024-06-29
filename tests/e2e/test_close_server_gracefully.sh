@@ -6,8 +6,8 @@ cargo build
 # Function to clean up processes
 cleanup() {
   echo "Cleaning up..."
-  kill $server_pid # close server at first, if something blocked, then this script is not ganna finished.
-  kill $client_pid
+  kill -SIGINT $server_pid # close server at first, if something blocked, then this script is not ganna finished.
+  kill -SIGINT $client_pid
 }
 
 # Trap EXIT signal to ensure cleanup

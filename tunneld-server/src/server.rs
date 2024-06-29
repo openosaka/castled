@@ -192,24 +192,24 @@ impl TunnelService for Handler {
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
-                            _ = server_closed.cancelled() => {
-                                debug!("server closed, close the control stream");
-                                break;
-                            }
-                            Some(connection) = new_connection_rx.recv() => {
-                                // receive new connections
-                                let connection_id = connection.id.to_string();
-                                connections.insert(connection.id.clone(), connection);
-                                outbound_streaming_tx
-                                    .send(Ok(Control {
-                                        command: Command::Work as i32,
-                                        payload: Some(Payload::Work(WorkPayload { connection_id })),
-                                    }))
-                                    .await
-                                    .context("failed to send work command")
-                                    .unwrap();
-                            }
+                        _ = server_closed.cancelled() => {
+                            debug!("server closed, close the control stream");
+                            break;
                         }
+                        Some(connection) = new_connection_rx.recv() => {
+                            // receive new connections
+                            let connection_id = connection.id.to_string();
+                            connections.insert(connection.id.clone(), connection);
+                            outbound_streaming_tx
+                                .send(Ok(Control {
+                                    command: Command::Work as i32,
+                                    payload: Some(Payload::Work(WorkPayload { connection_id })),
+                                }))
+                                .await
+                                .context("failed to send work command")
+                                .unwrap();
+                        }
+                    }
                 }
                 warn!("todo(sword): release connection");
             });
@@ -239,7 +239,7 @@ impl TunnelService for Handler {
             let mut started = false;
             loop {
                 tokio::select! {
-                    _ = server_closed.cancelled() => {/* quit */}
+                    _ = server_closed.cancelled() => { break }
                     Some(traffic) = inbound_stream.next() => {
                         match traffic {
                             Ok(traffic) => {
@@ -249,6 +249,7 @@ impl TunnelService for Handler {
                                     .context("connection not found")
                                     .unwrap();
                                 let connection = connection.value();
+                                // TODO(sword): remove connection
 
                                 use std::convert::TryFrom;
                                 match traffic_to_server::Action::try_from(traffic.action) {
@@ -305,13 +306,11 @@ impl TunnelService for Handler {
                                             "client finished sending traffic, connection_id: {}",
                                             connection_id
                                         );
-                                        connections.remove(&connection_id);
                                     }
                                     Ok(traffic_to_server::Action::Close) => {
                                         debug!("client closed streaming, connection_id: {}", connection_id);
                                         // notify tcp manager to close the user connection
                                         connection.cancel.cancel();
-                                        connections.remove(&connection_id);
                                     }
                                     Err(_) => {
                                         error!("invalid traffic action: {}", traffic.action);
