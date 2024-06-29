@@ -12,24 +12,34 @@ pub enum Payload {
 		port: u16,
 		// when the tunneld-client exit, the server will cancel the listener.
 		cancel: CancellationToken,
-		new_connection_sender: mpsc::Sender<Connection>,
+		conn_event_chan: ConnEventChan,
 	},
 }
 
-pub struct Connection {
+// ConnectionChannel is used to notify the server to add | remove to the connection list.
+pub type ConnEventChan = mpsc::Sender<ConnEvent>;
+
+pub enum ConnEvent {
+	Add(Conn),
+	Remove(String),
+}
+
+// this channel has two purposes:
+// 1. when the server receives `Start` action from `data` streaming,
+// the server will send `DataSender` through this channel,
+// 2. when the server receives `Sending` from `data` streaming,
+// the server will send `Data` through this channel.
+pub type ConnChan = mpsc::Sender<ConnChanDataType>;
+
+pub struct Conn {
     pub id: String,
-	// this channel has two purposes:
-	// 1. when the server receives `Start` action from `data` streaming,
-	// the server will send `DataSender` through this channel,
-	// 2. when the server receives `Sending` from `data` streaming,
-	// the server will send `Data` through this channel.
-    pub channel: mpsc::Sender<ConnectionChannelDataType>,
+    pub chan: ConnChan,
 	// when the server receives `Close` action from `data` streaming,
 	// the server will cancel the connection.
 	pub cancel: CancellationToken,
 }
 
-pub enum ConnectionChannelDataType {
+pub enum ConnChanDataType {
 	DataSender(mpsc::Sender<Vec<u8>>),
 	Data(Vec<u8>),
 }

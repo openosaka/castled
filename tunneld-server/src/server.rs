@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 pub struct Handler {
     event_tx: mpsc::Sender<event::Event>,
-    connections: Arc<DashMap<String, event::Connection>>,
+    connections: Arc<DashMap<String, event::Conn>>,
     close: CancellationToken,
 
     _priv: (),
@@ -159,14 +159,14 @@ impl TunnelService for Handler {
             let remote_port = tcp.remote_port.to_owned();
             // notify manager to create a listener,
             let (resp_tx, resp_rx) = oneshot::channel();
-            let (new_connection_tx, mut new_connection_rx) =
-                mpsc::channel::<event::Connection>(1024);
+            let (conn_event_chan_tx, mut conn_event_chan_rx) =
+                mpsc::channel::<event::ConnEvent>(1024);
             event_tx
                 .send(event::Event {
                     payload: event::Payload::TcpRegister {
                         port: remote_port as u16,
                         cancel: cancel_listener,
-                        new_connection_sender: new_connection_tx,
+                        conn_event_chan: conn_event_chan_tx,
                     },
                     resp: resp_tx,
                 })
@@ -196,18 +196,26 @@ impl TunnelService for Handler {
                             debug!("server closed, close the control stream");
                             break;
                         }
-                        Some(connection) = new_connection_rx.recv() => {
-                            // receive new connections
-                            let connection_id = connection.id.to_string();
-                            connections.insert(connection.id.clone(), connection);
-                            outbound_streaming_tx
-                                .send(Ok(Control {
-                                    command: Command::Work as i32,
-                                    payload: Some(Payload::Work(WorkPayload { connection_id })),
-                                }))
-                                .await
-                                .context("failed to send work command")
-                                .unwrap();
+                        Some(connection) = conn_event_chan_rx.recv() => {
+                            match connection {
+                                event::ConnEvent::Add(connection) => {
+                                    // receive new connection
+                                    let connection_id = connection.id.to_string();
+                                    connections.insert(connection.id.clone(), connection);
+                                    outbound_streaming_tx
+                                        .send(Ok(Control {
+                                            command: Command::Work as i32,
+                                            payload: Some(Payload::Work(WorkPayload { connection_id })),
+                                        }))
+                                        .await
+                                        .context("failed to send work command")
+                                        .unwrap();
+                                }
+                                event::ConnEvent::Remove(connection_id) => {
+                                    debug!("remove connection: {}", connection_id);
+                                    connections.remove(&connection_id);
+                                }
+                            }
                         }
                     }
                 }
@@ -267,8 +275,8 @@ impl TunnelService for Handler {
                                         // we read data from transfer_rx, then forward the data to outbound_tx
                                         let (transfer_tx, mut transfer_rx) = mpsc::channel(1024);
                                         connection
-                                            .channel
-                                            .send(event::ConnectionChannelDataType::DataSender(transfer_tx))
+                                            .chan
+                                            .send(event::ConnChanDataType::DataSender(transfer_tx))
                                             .await
                                             .context("failed to send streaming_tx to data_sender_sender")
                                             .unwrap();
@@ -296,8 +304,8 @@ impl TunnelService for Handler {
                                             connection_id
                                         );
                                         connection
-                                            .channel
-                                            .send(event::ConnectionChannelDataType::Data(traffic.data))
+                                            .chan
+                                            .send(event::ConnChanDataType::Data(traffic.data))
                                             .await
                                             .unwrap();
                                     }

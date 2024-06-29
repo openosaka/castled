@@ -27,12 +27,12 @@ impl TcpManager {
                 event::Payload::TcpRegister {
                     port,
                     cancel,
-                    new_connection_sender,
+                    conn_event_chan,
                 } => match create_listener(port).await {
                     Ok(listener) => {
                         let this = Arc::clone(&this);
                         spawn(async move {
-                            this.handle_listener(listener, cancel, new_connection_sender)
+                            this.handle_listener(listener, cancel, conn_event_chan.clone())
                                 .await;
                             debug!("tcp listener on {} closed", port);
                         });
@@ -52,14 +52,27 @@ impl TcpManager {
         &self,
         listener: tokio::net::TcpListener,
         shutdown: CancellationToken,
-        new_connection_sender: mpsc::Sender<event::Connection>,
+        conn_event_chan: mpsc::Sender<event::ConnEvent>,
     ) {
         loop {
             select! {
                 _ = shutdown.cancelled() => {
                     return;
                 }
-                result = listener.accept() => {
+                result = async {
+                    match listener.accept().await  {
+                        Ok(result) => {
+                            Some(result)
+                        }
+                        Err(err) => {
+                            debug!("failed to accept connection: {:?}", err);
+                            None
+                        }
+                    }
+                } => {
+                    if result.is_none() {
+                        return;
+                    }
                     let (stream, addr) = result.unwrap();
                     let connection_id = Uuid::new_v4().to_string();
                     let (data_channel, mut data_channel_rx) = mpsc::channel(1024);
@@ -68,20 +81,21 @@ impl TcpManager {
                     let cancel_w = CancellationToken::new();
                     let cancel = cancel_w.clone();
 
-                    let event = event::Connection{
+                    let event = event::Conn{
                         id: connection_id.clone(),
-                        channel: data_channel.clone(),
+                        chan: data_channel.clone(),
                         cancel: cancel_w,
                     };
-                    new_connection_sender.send(event).await.unwrap();
+                    conn_event_chan.send(event::ConnEvent::Add(event)).await.unwrap();
                     let data_sender = data_channel_rx.recv().await.context("failed to receive data_sender").unwrap();
                     let data_sender = {
                         match data_sender {
-                            event::ConnectionChannelDataType::DataSender(sender) => sender,
+                            event::ConnChanDataType::DataSender(sender) => sender,
                             _ => panic!("we expect to receive DataSender from data_channel_rx at the first time."),
                         }
                     };
 
+                    let conn_event_chan_for_removing = conn_event_chan.clone();
                     tokio::spawn(async move {
                         let (mut remote_reader, mut remote_writer) = stream.into_split();
                         let wrapper = VecWrapper::<Vec<u8>>::new();
@@ -102,14 +116,20 @@ impl TcpManager {
 
                         tokio::select! {
                             _ = async { tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remote) } => {
-                                debug!("finished the transfer between remote and tunnel");
+                                debug!("finished the transfer");
                             }
                             _ = cancel.cancelled() => {
                                 let _ = remote_writer.shutdown().await;
                                 let _ = tunnel_writer.shutdown().await;
                             }
                         }
-                        debug!("closed connection {}", connection_id);
+
+                        debug!("closeing user connection {}", connection_id);
+                        conn_event_chan_for_removing
+                            .send(event::ConnEvent::Remove(connection_id))
+                            .await
+                            .context("notify server to remove connection channel")
+                            .unwrap();
                     });
                 }
             }
