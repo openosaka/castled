@@ -33,7 +33,7 @@ pub fn validate_register_req(req: &RegisterReq) -> Option<Status> {
 					return Some(Status::invalid_argument("http is required"));
 				}
 				Http(h) => {
-					if h.remote_port == 0 || h.subdomain.is_empty() || h.domain.is_empty() {
+					if h.remote_port == 0 && h.subdomain.is_empty() && h.domain.is_empty() {
 						return Some(Status::invalid_argument("at least remote_port, subdomain and domain is required"));
 					}
 				}

@@ -9,3 +9,4 @@ tokio-util = "0.7.11"
 tracing-subscriber = "0.3.18"
 tunneld-server = { path = "../tunneld-server" }
 tunneld-client = { path = "../tunneld-client" }
+bytes = "1.6.0"

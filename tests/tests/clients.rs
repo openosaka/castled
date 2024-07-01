@@ -1,5 +1,6 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, thread::spawn};
 
+use bytes::Bytes;
 use tests::{free_port, is_port_listening};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -92,7 +93,7 @@ async fn client_register_and_close_then_register_again() {
 
 struct TestServer {
     control_port: u16,
-    http_port: u16,
+    vhttp_port: u16,
     cancel: CancellationToken,
 }
 
@@ -105,10 +106,10 @@ impl TestServer {
 
 async fn start_server() -> TestServer {
     let control_port = free_port().unwrap();
-    let http_port = free_port().unwrap();
+    let vhttp_port = free_port().unwrap();
     let mut server = tunneld_server::Server::new(tunneld_server::Config {
         control_port,
-        http_port,
+        vhttp_port,
         domain: "".to_string(),
     });
     let cancel_w = CancellationToken::new();
@@ -120,7 +121,7 @@ async fn start_server() -> TestServer {
 
     TestServer {
         control_port,
-        http_port,
+        vhttp_port,
         cancel: cancel_w,
     }
 }
