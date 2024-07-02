@@ -1160,7 +1160,6 @@ dependencies = [
 name = "tests"
 version = "0.1.0"
 dependencies = [
- "bytes",
  "tokio",
  "tokio-util",
  "tracing-subscriber",

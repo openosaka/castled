@@ -175,6 +175,7 @@ impl TunnelService for Handler {
 
         match req.tunnel.as_ref().unwrap().config.as_ref().unwrap() {
             Tcp(tcp) => {
+                debug!("registering tcp tunnel on remote_port: {:?}", tcp.remote_port);
                 let remote_port = tcp.remote_port.to_owned();
                 event_tx
                     .send(event::Event {

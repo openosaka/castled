@@ -1,6 +1,5 @@
-use std::{net::SocketAddr, thread::spawn};
+use std::net::SocketAddr;
 
-use bytes::Bytes;
 use tests::{free_port, is_port_listening};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -22,9 +21,8 @@ async fn client_register_tcp() {
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), remote_port, 1234 /* no matter */);
+        client.add_tcp_tunnel("test".to_string(), 1234 /* no matter */, remote_port);
 
-        sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client.run(close_client).await;
         assert!(client_exit.is_ok());
     });
@@ -33,7 +31,13 @@ async fn client_register_tcp() {
     sleep(tokio::time::Duration::from_millis(300)).await;
     assert!(
         is_port_listening(remote_port),
-        "remote port is not listening"
+        "remote port {} is not listening",
+        remote_port,
+    );
+    assert!(
+        is_port_listening(server.vhttp_port),
+        "vhttp port {} is not listening",
+        server.vhttp_port,
     );
 
     server.cancel.cancel();
@@ -54,7 +58,7 @@ async fn client_register_and_close_then_register_again() {
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), remote_port, 1234 /* no matter */);
+        client.add_tcp_tunnel("test".to_string(), 1234 /* no matter */, remote_port);
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client.run(close_client).await;
@@ -75,7 +79,7 @@ async fn client_register_and_close_then_register_again() {
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), remote_port, 1234 /* no matter */);
+        client.add_tcp_tunnel("test".to_string(), 1234, remote_port);
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client.run(close_client).await;
@@ -117,7 +121,7 @@ async fn start_server() -> TestServer {
     tokio::spawn(async move {
         server.run(cancel).await;
     });
-    sleep(tokio::time::Duration::from_millis(300)).await;
+    sleep(tokio::time::Duration::from_millis(200)).await;
 
     TestServer {
         control_port,
