@@ -6,14 +6,16 @@ pub struct Config {
     pub control_port: u16,
 
     #[arg(long, default_value = "6611")]
-    pub http_port: u16,
+    pub vhttp_port: u16,
 
-    /// Domain name for the server, it could be empty,
+    /// Domain name for the http server, it could be empty,
     /// the client can't register with domain if it's empty.
+    /// 
+    /// e.g. "tunnel.example.com", don't include the protocol.
     #[arg(long, default_value = "", required = false)]
     pub domain: String,
 }
 
-mod manager;
+mod transport;
 mod server;
 pub use server::*;

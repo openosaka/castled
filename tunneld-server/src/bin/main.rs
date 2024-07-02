@@ -23,7 +23,7 @@ async fn main() {
         cancel_w.cancel();
     });
 
-    let mut server = Server::new(config);
+    let server = Server::new(config);
     if let Err(err) = server.run(cancel).await {
         eprintln!("server error: {:?}", err);
     }

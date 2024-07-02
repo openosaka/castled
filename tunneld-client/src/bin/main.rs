@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use bytes::Bytes;
 
 use clap::{Parser, Subcommand};
 use tokio::signal;
@@ -23,12 +24,14 @@ enum Commands {
         remote_port: u16,
     },
     Http {
+        #[clap(index = 1)]
+        port: u16,
         #[arg(long)]
-        remote_port: u16,
+        remote_port: Option<u16>,
         #[arg(long)]
-        subdomain: String,
+        subdomain: Option<String>,
         #[arg(long)]
-        domain: String,
+        domain: Option<String>,
     },
 }
 
@@ -56,14 +59,21 @@ async fn main() {
 
     match args.command {
         Commands::Tcp { port, remote_port } => {
-            client.add_tcp_tunnel(TUNNEL_NAME.to_string(), remote_port, port);
+            client.add_tcp_tunnel(TUNNEL_NAME.to_string(), port, remote_port);
         }
         Commands::Http {
+            port,
             remote_port,
             subdomain,
             domain,
         } => {
-            client.add_http_tunnel(remote_port, &subdomain, &domain);
+            client.add_http_tunnel(
+                TUNNEL_NAME.to_string(),
+                port,
+                remote_port.unwrap_or(0),
+                Bytes::from(subdomain.unwrap_or_default()),
+                Bytes::from(domain.unwrap_or_default()),
+            );
         }
     }
 

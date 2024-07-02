@@ -1,7 +1,9 @@
+use bytes::Bytes;
 use std::sync::Arc;
 use std::{net::ToSocketAddrs, pin::Pin};
 
-use crate::{manager, Config};
+use crate::transport::EventBus;
+use crate::Config;
 use anyhow::Context as _;
 use core::task::{Context, Poll};
 use dashmap::DashMap;
@@ -11,10 +13,11 @@ use tokio::sync::oneshot;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 use tunneld_pkg::event;
 use tunneld_protocol::pb::{
     control::Payload,
+    tunnel::Config::Http,
     tunnel::Config::Tcp,
     tunnel_service_server::{TunnelService, TunnelServiceServer},
     Command, Control, InitPayload, RegisterReq, TrafficToClient, WorkPayload,
@@ -81,8 +84,10 @@ impl<T> Drop for CancelableReceiver<T> {
 }
 
 pub struct Server {
-    config: Config,
-    server: GrpcServer,
+    control_port: u16,
+    _vhttp_port: u16,
+    control_server: GrpcServer,
+    events: EventBus,
 }
 
 impl Server {
@@ -91,12 +96,18 @@ impl Server {
         let server = GrpcServer::builder()
             .http2_keepalive_interval(Some(tokio::time::Duration::from_secs(60)))
             .http2_keepalive_timeout(Some(tokio::time::Duration::from_secs(3)));
+        let events = EventBus::new(config.vhttp_port, config.domain.clone());
 
-        Self { config, server }
+        Self {
+            control_port: config.control_port,
+            _vhttp_port: config.vhttp_port,
+            control_server: server,
+            events,
+        }
     }
 
-    pub async fn run(&mut self, cancel: CancellationToken) -> anyhow::Result<()> {
-        let addr = format!("0.0.0.0:{}", self.config.control_port)
+    pub async fn run(self, cancel: CancellationToken) -> anyhow::Result<()> {
+        let addr = format!("0.0.0.0:{}", self.control_port)
             .to_socket_addrs()
             .context("parse control port")?
             .next()
@@ -106,16 +117,22 @@ impl Server {
         let (event_tx, event_rx) = mpsc::channel(1024);
 
         let handler = Handler::new(cancel.clone(), event_tx);
+        let events = self.events;
         tokio::spawn(async move {
-            manager::TcpManager::new().handle_listeners(event_rx).await;
+            events.listen(event_rx).await;
         });
 
-        debug!("starting server on: {}", addr);
+        info!("starting control server on: {}", addr);
 
-        self.server
-            .add_service(TunnelServiceServer::new(handler))
-            .serve_with_shutdown(addr, cancel.cancelled())
-            .await?;
+        let mut control_server = self.control_server;
+        let run_control_server = tokio::spawn(async move {
+            control_server
+                .add_service(TunnelServiceServer::new(handler))
+                .serve_with_shutdown(addr, cancel.cancelled())
+                .await
+        });
+
+        let _grpc_result = tokio::join!(run_control_server);
         Ok(())
     }
 }
@@ -153,77 +170,91 @@ impl TunnelService for Handler {
         let event_tx = self.event_tx.clone();
         let server_closed = self.close.clone();
 
-        // TODO(sword): support more tunnel types
-        // let's assume it's a TCP tunnel for now
-        if let Tcp(tcp) = req.tunnel.as_ref().unwrap().config.as_ref().unwrap() {
-            let remote_port = tcp.remote_port.to_owned();
-            // notify manager to create a listener,
-            let (resp_tx, resp_rx) = oneshot::channel();
-            let (conn_event_chan_tx, mut conn_event_chan_rx) =
-                mpsc::channel::<event::ConnEvent>(1024);
-            event_tx
-                .send(event::Event {
-                    payload: event::Payload::TcpRegister {
-                        port: remote_port as u16,
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let (conn_event_chan_tx, mut conn_event_chan_rx) = mpsc::channel::<event::ConnEvent>(1024);
+
+        match req.tunnel.as_ref().unwrap().config.as_ref().unwrap() {
+            Tcp(tcp) => {
+                debug!("registering tcp tunnel on remote_port: {:?}", tcp.remote_port);
+                let remote_port = tcp.remote_port.to_owned();
+                event_tx
+                    .send(event::Event {
+                        payload: event::Payload::RegisterTcp {
+                            port: remote_port as u16,
+                        },
                         cancel: cancel_listener,
                         conn_event_chan: conn_event_chan_tx,
-                    },
-                    resp: resp_tx,
-                })
-                .await
-                .context("failed to notify manager to create listener")
-                .unwrap();
-            match resp_rx.await {
-                Ok(None) => {
-                    debug!("listener created on port: {}", remote_port);
-                }
-                Ok(Some(status)) => {
-                    outbound_streaming_tx.send(Err(status)).await.unwrap();
-                }
-                Err(_err) => {
-                    outbound_streaming_tx
-                        .send(Err(Status::internal("failed to create lister")))
-                        .await
-                        .unwrap();
-                }
+                        resp: resp_tx,
+                    })
+                    .await
+                    .context("failed to register tcp tunnel")
+                    .unwrap();
             }
+            Http(http) => {
+                event_tx
+                    .send(event::Event {
+                        payload: event::Payload::RegisterHttp {
+                            port: http.remote_port as u16,
+                            subdomain: Bytes::from(http.subdomain.to_owned()),
+                            domain: Bytes::from(http.domain.to_owned()),
+                        },
+                        cancel: cancel_listener,
+                        conn_event_chan: conn_event_chan_tx,
+                        resp: resp_tx,
+                    })
+                    .await
+                    .context("failed to register http tunnel")
+                    .unwrap();
+            }
+        }
 
-            let connections = self.connections.clone();
-            tokio::spawn(async move {
-                loop {
-                    tokio::select! {
-                        _ = server_closed.cancelled() => {
-                            debug!("server closed, close the control stream");
-                            break;
-                        }
-                        Some(connection) = conn_event_chan_rx.recv() => {
-                            match connection {
-                                event::ConnEvent::Add(connection) => {
-                                    debug!("new user connection {}", connection.id);
-                                    // receive new connection
-                                    let connection_id = connection.id.to_string();
-                                    connections.insert(connection.id.clone(), connection);
-                                    outbound_streaming_tx
-                                        .send(Ok(Control {
-                                            command: Command::Work as i32,
-                                            payload: Some(Payload::Work(WorkPayload { connection_id })),
-                                        }))
-                                        .await
-                                        .context("failed to send work command")
-                                        .unwrap();
-                                }
-                                event::ConnEvent::Remove(connection_id) => {
-                                    debug!("remove user connection: {}", connection_id);
-                                    connections.remove(&connection_id);
-                                }
+        match resp_rx.await {
+            Ok(None) => {}
+            Ok(Some(status)) => {
+                outbound_streaming_tx.send(Err(status)).await.unwrap();
+            }
+            Err(err) => {
+                error!("register response: {:?}", err);
+                outbound_streaming_tx
+                    .send(Err(Status::internal("failed to create listener")))
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let connections = self.connections.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = server_closed.cancelled() => {
+                        debug!("server closed, close the control stream");
+                        break;
+                    }
+                    Some(connection) = conn_event_chan_rx.recv() => {
+                        match connection {
+                            event::ConnEvent::Add(connection) => {
+                                debug!("new user connection {}", connection.id);
+                                // receive new connection
+                                let connection_id = connection.id.to_string();
+                                connections.insert(connection.id.clone(), connection);
+                                outbound_streaming_tx
+                                    .send(Ok(Control {
+                                        command: Command::Work as i32,
+                                        payload: Some(Payload::Work(WorkPayload { connection_id })),
+                                    }))
+                                    .await
+                                    .context("failed to send work command")
+                                    .unwrap();
+                            }
+                            event::ConnEvent::Remove(connection_id) => {
+                                debug!("remove user connection: {}", connection_id);
+                                connections.remove(&connection_id);
                             }
                         }
                     }
                 }
-            });
-        } else {
-            unimplemented!("only support TCP tunnel for now")
-        }
+            }
+        });
 
         let control_stream = Box::pin(CancelableReceiver::new(
             cancel_listener_w,
@@ -257,7 +288,6 @@ impl TunnelService for Handler {
                                     .context("connection not found")
                                     .unwrap();
                                 let connection = connection.value();
-                                // TODO(sword): remove connection
 
                                 use std::convert::TryFrom;
                                 match traffic_to_server::Action::try_from(traffic.action) {
@@ -350,9 +380,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_server() {
-        let mut server = Server::new(Config {
+        let server = Server::new(Config {
             control_port: 8610,
-            http_port: 8611,
+            vhttp_port: 8611,
             domain: "".to_string(),
         });
         let cancel_w = CancellationToken::new();

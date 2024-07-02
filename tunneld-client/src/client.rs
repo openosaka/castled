@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use futures::future::join_all;
 use tokio::{
     io::{self, AsyncRead, AsyncWrite, AsyncWriteExt},
@@ -9,7 +10,7 @@ use tokio::{
 };
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tokio_util::sync::CancellationToken;
-use tonic::transport::Channel;
+use tonic::{transport::Channel, Streaming};
 use tracing::{debug, error};
 use tunneld_pkg::io::{StreamingReader, StreamingWriter, TrafficToServerWrapper};
 use tunneld_protocol::pb::{
@@ -17,12 +18,13 @@ use tunneld_protocol::pb::{
     traffic_to_server,
     tunnel::{self, Type},
     tunnel_service_client::TunnelServiceClient,
-    Command, RegisterReq, TcpConfig, TrafficToClient, TrafficToServer, Tunnel,
+    Command, Control, HttpConfig, RegisterReq, TcpConfig, TrafficToClient, TrafficToServer, Tunnel,
 };
 
 pub struct Client<'a> {
     control_addr: &'a SocketAddr,
-    tunnels: Vec<TcpTunnel>,
+    tcp_tunnels: Vec<TcpTunnel>,
+    http_tunnels: Vec<HttpTunnel>,
 }
 
 struct TcpTunnel {
@@ -31,58 +33,132 @@ struct TcpTunnel {
     local_port: u16,
 }
 
+struct HttpTunnel {
+    name: String,
+    remote_port: u16,
+    local_port: u16,
+    subdomain: Bytes,
+    domain: Bytes,
+}
+
 impl<'a> Client<'a> {
     pub fn new(addr: &'a SocketAddr) -> Result<Self> {
         Ok(Self {
             control_addr: addr,
-            tunnels: Vec::new(),
+            tcp_tunnels: Vec::new(),
+            http_tunnels: Vec::new(),
         })
     }
 
     pub async fn run(&mut self, cancel: CancellationToken) -> Result<()> {
         let mut tasks = Vec::new();
-        for tunnel in self.tunnels.iter() {
-            tasks.push(self.register_tcp(cancel.clone(), tunnel));
+        for tcp_tunnel in self.tcp_tunnels.iter() {
+            let tunnel = Tunnel {
+                name: tcp_tunnel.name.to_string(),
+                r#type: Type::Tcp as i32,
+                config: Some(tunnel::Config::Tcp(TcpConfig {
+                    remote_port: tcp_tunnel.remote_port as i32,
+                })),
+                ..Default::default()
+            };
+            tasks.push(self.handle_tunnel(cancel.clone(), tunnel, tcp_tunnel.local_port));
         }
+
+        for http_tunnel in self.http_tunnels.iter() {
+            let tunnel = Tunnel {
+                name: http_tunnel.name.to_string(),
+                r#type: Type::Http as i32,
+                config: Some(tunnel::Config::Http(HttpConfig {
+                    remote_port: http_tunnel.remote_port as i32,
+                    subdomain: String::from_utf8_lossy(http_tunnel.subdomain.to_vec().as_slice())
+                        .to_string(),
+                    domain: String::from_utf8_lossy(http_tunnel.domain.to_vec().as_slice())
+                        .to_string(),
+                })),
+                ..Default::default()
+            };
+            tasks.push(self.handle_tunnel(cancel.clone(), tunnel, http_tunnel.local_port));
+        }
+
         let results = join_all(tasks).await;
 
         // log the errors
-        results.iter().enumerate().for_each(|(i, r)| {
+        results.iter().for_each(|r| {
             if let Err(e) = r {
-                error!("tunnel {}: {:?}", self.tunnels[i].name, e);
+                error!("{:?}", e);
             }
         });
 
         Ok(())
     }
 
-    pub fn add_tcp_tunnel(&mut self, name: String, remote_port: u16, local_port: u16) {
+    pub fn add_tcp_tunnel(&mut self, name: String, local_port: u16, remote_port: u16) {
         debug!(
             "Registering TCP tunnel, remote_port: {}, local_port: {}",
             remote_port, local_port
         );
-        self.tunnels.push(TcpTunnel {
+        self.tcp_tunnels.push(TcpTunnel {
             name,
             remote_port,
             local_port,
         });
     }
 
-    async fn register_tcp(&self, cancel: CancellationToken, tcp: &TcpTunnel) -> Result<()> {
+    pub fn add_http_tunnel(
+        &mut self,
+        name: String,
+        local_port: u16,
+        remote_port: u16,
+        subdomain: Bytes,
+        domain: Bytes,
+    ) {
+        self.http_tunnels.push(HttpTunnel {
+            name,
+            remote_port,
+            local_port,
+            subdomain,
+            domain,
+        });
+    }
+
+    async fn handle_tunnel(
+        &self,
+        cancel: CancellationToken,
+        tunnel: Tunnel,
+        local_port: u16,
+    ) -> Result<()> {
         let mut rpc_client = self.new_rpc_client().await?;
-        let register_resp = rpc_client
-            .register(RegisterReq {
-                client_version: "todo".to_string(),
-                tunnel: Some(Tunnel {
-                    name: tcp.name.to_string(),
-                    r#type: Type::Tcp as i32,
-                    config: Some(tunnel::Config::Tcp(TcpConfig {
-                        remote_port: tcp.remote_port as i32,
-                    })),
-                    ..Default::default()
-                }),
-            })
-            .await?;
+        let register = rpc_client.register(RegisterReq {
+            client_version: "todo".to_string(),
+            tunnel: Some(tunnel),
+        });
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                debug!("cancelling tcp tunnel");
+                Ok(())
+            }
+            register_resp = register => {
+                debug!("registered tunnel");
+                match register_resp {
+                    Err(e) => {
+                        error!("failed to register tunnel: {:?}", e);
+                        Ok(())
+                    }
+                    Ok(register_resp) => {
+                        self.handle_control_stream(cancel, rpc_client, register_resp, local_port).await
+                    }
+                }
+            }
+        }
+    }
+
+    async fn handle_control_stream(
+        &self,
+        cancel: CancellationToken,
+        rpc_client: TunnelServiceClient<Channel>,
+        register_resp: tonic::Response<Streaming<Control>>,
+        local_port: u16,
+    ) -> Result<()> {
         let mut control_stream = register_resp.into_inner();
         let mut initialized = false;
         loop {
@@ -130,7 +206,7 @@ impl<'a> Client<'a> {
                                 }
                                 Some(Payload::Work(work)) => {
                                     debug!("received work command, starting to forward traffic");
-                                    if let Err(e) = handle_work_traffic(rpc_client.clone() /* cheap clone operation */, &work.connection_id, tcp.local_port).await {
+                                    if let Err(e) = handle_work_traffic(rpc_client.clone() /* cheap clone operation */, &work.connection_id, local_port).await {
                                         error!("failed to handle work traffic: {:?}", e);
                                     } else {
                                         continue; // the only path to success.
@@ -155,14 +231,6 @@ impl<'a> Client<'a> {
         }
 
         Ok(())
-    }
-
-    pub fn add_http_tunnel(&self, remote_port: u16, subdomain: &str, domain: &str) {
-        println!(
-            "registering HTTP tunnel to port {}, subdomain: {}, domain: {}",
-            remote_port, subdomain, domain
-        );
-        panic!("Not implemented");
     }
 
     async fn new_rpc_client(&self) -> Result<TunnelServiceClient<Channel>> {

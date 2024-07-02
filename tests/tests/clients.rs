@@ -21,9 +21,8 @@ async fn client_register_tcp() {
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), remote_port, 1234 /* no matter */);
+        client.add_tcp_tunnel("test".to_string(), 1234 /* no matter */, remote_port);
 
-        sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client.run(close_client).await;
         assert!(client_exit.is_ok());
     });
@@ -32,7 +31,13 @@ async fn client_register_tcp() {
     sleep(tokio::time::Duration::from_millis(300)).await;
     assert!(
         is_port_listening(remote_port),
-        "remote port is not listening"
+        "remote port {} is not listening",
+        remote_port,
+    );
+    assert!(
+        is_port_listening(server.vhttp_port),
+        "vhttp port {} is not listening",
+        server.vhttp_port,
     );
 
     server.cancel.cancel();
@@ -53,7 +58,7 @@ async fn client_register_and_close_then_register_again() {
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), remote_port, 1234 /* no matter */);
+        client.add_tcp_tunnel("test".to_string(), 1234 /* no matter */, remote_port);
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client.run(close_client).await;
@@ -74,7 +79,7 @@ async fn client_register_and_close_then_register_again() {
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), remote_port, 1234 /* no matter */);
+        client.add_tcp_tunnel("test".to_string(), 1234, remote_port);
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client.run(close_client).await;
@@ -92,7 +97,7 @@ async fn client_register_and_close_then_register_again() {
 
 struct TestServer {
     control_port: u16,
-    http_port: u16,
+    vhttp_port: u16,
     cancel: CancellationToken,
 }
 
@@ -105,10 +110,10 @@ impl TestServer {
 
 async fn start_server() -> TestServer {
     let control_port = free_port().unwrap();
-    let http_port = free_port().unwrap();
+    let vhttp_port = free_port().unwrap();
     let mut server = tunneld_server::Server::new(tunneld_server::Config {
         control_port,
-        http_port,
+        vhttp_port,
         domain: "".to_string(),
     });
     let cancel_w = CancellationToken::new();
@@ -116,11 +121,11 @@ async fn start_server() -> TestServer {
     tokio::spawn(async move {
         server.run(cancel).await;
     });
-    sleep(tokio::time::Duration::from_millis(300)).await;
+    sleep(tokio::time::Duration::from_millis(200)).await;
 
     TestServer {
         control_port,
-        http_port,
+        vhttp_port,
         cancel: cancel_w,
     }
 }

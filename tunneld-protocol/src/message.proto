@@ -96,8 +96,8 @@ message Tunnel {
   Type type = 3;
 
   oneof config {
-    HTTPConfig http = 4;
-    TCPConfig tcp = 5;
+    TCPConfig tcp = 4;
+    HTTPConfig http = 5;
   }
 }
 
