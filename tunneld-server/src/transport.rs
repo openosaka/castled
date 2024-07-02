@@ -1,10 +1,13 @@
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use bytes::Bytes;
 use dashmap::DashMap;
 use http::HeaderValue;
-use http_body_util::Full;
+use http_body::Frame;
+use http_body_util::combinators::BoxBody;
+use http_body_util::StreamBody;
 use hyper::body::Body;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -58,11 +61,11 @@ impl HttpTunnel {
 static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
 
 impl HttpTunnel {
-    async fn call<T: Body + std::fmt::Debug>(&self, req: Request<T>) -> Response<Full<Bytes>> {
-        let host = req
-            .headers()
-            .get("host")
-            .unwrap_or(&EMPTY_HOST);
+    async fn call<T: Body + std::fmt::Debug>(
+        &self,
+        req: Request<T>,
+    ) -> Response<BoxBody<Bytes, Infallible>> {
+        let host = req.headers().get("host").unwrap_or(&EMPTY_HOST);
         let host = host.to_str().unwrap_or_default();
         // match the host
         debug!("host: {}", host);
@@ -72,15 +75,51 @@ impl HttpTunnel {
         let subdomain = Bytes::copy_from_slice(subdomain.as_bytes());
         let result = self.get_subdomain(subdomain);
         if result.is_none() {
-            return Response::builder()
-                .status(404)
-                .body(Full::new(Bytes::from("tunnel not found")))
-                .unwrap();
+            let chunks: Vec<Result<_, Infallible>> =
+                vec![Ok(Frame::data(Bytes::from_static(b"tunnel not found")))];
+            let stream = futures_util::stream::iter(chunks);
+            let body = BoxBody::new(StreamBody::new(stream));
+            return Response::builder().status(404).body(body).unwrap();
         }
 
-        Response::builder()
-            .body(Full::new(Bytes::from("Hello world")))
-            .unwrap()
+        let conn_event_sender = result.unwrap();
+        let connection_id = Uuid::new_v4().to_string();
+        let (conn_chan, mut conn_event_chan_rx) = mpsc::channel(1024);
+
+        let cancel_w = CancellationToken::new();
+        let _cancel = cancel_w.clone();
+
+        conn_event_sender
+            .send(event::ConnEvent::Add(event::Conn {
+                id: connection_id,
+                chan: conn_chan,
+                cancel: cancel_w,
+            }))
+            .await
+            .unwrap();
+
+        let data_sender = conn_event_chan_rx
+            .recv()
+            .await
+            .context("failed to receive data_sender")
+            .unwrap();
+        let _data_sender = {
+            match data_sender {
+                event::ConnChanDataType::DataSender(sender) => sender,
+                _ => panic!(
+                    "we expect to receive DataSender from data_channel_rx at the first time."
+                ),
+            }
+        };
+
+        // read data from conn_event_chan_rx, write data to tunnel
+        // read data from tunnel, write data to data_sender
+
+        let chunks: Vec<Result<_, Infallible>> =
+            vec![Ok(Frame::data(Bytes::from_static(b"Hello world!")))];
+        let stream = futures_util::stream::iter(chunks);
+        let body = BoxBody::new(StreamBody::new(stream));
+        Response::builder().body(body).unwrap()
     }
 }
 
@@ -113,7 +152,7 @@ impl EventBus {
                         let new_service = service_fn(move |req| {
                             let http_tunnel = this.http_tunnel.clone();
                             async move {
-                                Ok::<Response<Full<Bytes>>, hyper::Error>(
+                                Ok::<Response<BoxBody<Bytes, Infallible>>, hyper::Error>(
                                     http_tunnel.call(req).await,
                                 )
                             }
