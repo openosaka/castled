@@ -1,5 +1,5 @@
 #!/bin/bash
-set -x
+set -xe
 
 root_dir=$(git rev-parse --show-toplevel)
 cur_dir=$root_dir/tests/e2e
@@ -27,38 +27,48 @@ server_pid=$!
 sleep 1
 
 # Start the tunnel client
-exec $root_dir/target/debug/tunnel http 12345 --domain foo.com &
+exec $root_dir/target/debug/tunnel http 12345 --domain "foo.com" &
 client_pid=$!
+
+# test can't bind to the same subdomain
+$root_dir/target/debug/tunnel http 6666 --domain "foo.com"
+error_code=$?
+if [[ $error_code -eq 0 ]]; then
+	echo "Test failed: Expected non-zero error code, got $error_code"
+	exit 1
+fi
 
 # Start the nc TCP server
 exec $cur_dir/ping.py 12345 &
 http_server_pid1=$!
 
 sleep 1
-response=$(curl -s -H "Host: foo.com" http://localhost:12345/ping?query=tunneld)
+response=$(curl -s -H "Host: foo.com" http://localhost:6611/ping?query=tunneld)
 if [[ $response != "pong=tunneld" ]]; then
-	echo "Test failed: Response is not pong=tunneld"
+	echo "Test failed: Response is not pong=tunneld, is $response"
 	exit 1
 fi
 
 # kill the client and register again
 kill -SIGINT $client_pid
-exec $root_dir/target/debug/tunnel http 12345 --subdomain foo.com &
+exec $root_dir/target/debug/tunnel http 12345 --domain foo.com &
 client_pid=$!
 
-exec $root_dir/target/debug/tunnel http 12346 --subdomain bar.com &
+exec $root_dir/target/debug/tunnel http 12346 --domain bar.com &
 client_pid2=$!
 exec $cur_dir/ping.py 12346 &
 http_server_pid2=$!
 
-response=$(curl -s -H "Host: foo.com" http://localhost:12345/ping?query=server1)
+sleep 1
+
+response=$(curl -s -H "Host: foo.com" http://localhost:6611/ping?query=server1)
 if [[ $response != "pong=server1" ]]; then
-	echo "Test failed: Response is not pong=tunneld"
-	exit 1
+	echo "Test failed: Response is not pong=server1, is $response"
+	exit 2
 fi
 
-response=$(curl -s -H "Host: bar.com" http://localhost:12345/ping?query=server2)
+response=$(curl -s -H "Host: bar.com" http://localhost:6611/ping?query=server2)
 if [[ $response != "pong=server2" ]]; then
-	echo "Test failed: Response is not pong=tunneld"
-	exit 1
+	echo "Test failed: Response is not pong=server1, is $response"
+	exit 3
 fi

@@ -11,14 +11,10 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         query_value = query_params.get('query', [''])[0]
 
         if parsed_path.path == '/ping':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
             response = f'pong={query_value}'
             self.wfile.write(response.encode())
         else:
             self.send_response(404)
-            self.end_headers()
             self.wfile.write(b'Not Found')
     def do_GET(self):
         self.handle_request()

@@ -1,5 +1,5 @@
-use std::net::SocketAddr;
 use bytes::Bytes;
+use std::net::SocketAddr;
 
 use clap::{Parser, Subcommand};
 use tokio::signal;
@@ -38,7 +38,7 @@ enum Commands {
 const TUNNEL_NAME: &str = "tunneld-client";
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
@@ -77,9 +77,5 @@ async fn main() {
         }
     }
 
-    if let Err(err) = client.run(cancel).await {
-        eprintln!("server error: {:?}", err);
-    }
-
-    println!("Server address: {:?}", &args.server_addr);
+    client.run(cancel).await
 }
