@@ -1,5 +1,5 @@
 #!/bin/bash
-# set -x
+set -x
 
 root_dir=$(git rev-parse --show-toplevel)
 cur_dir=$root_dir/tests/e2e
@@ -27,7 +27,7 @@ server_pid=$!
 sleep 1
 
 # Start the tunnel client
-exec $root_dir/target/debug/tunnel http 12345 --subdomain foo &
+exec $root_dir/target/debug/tunnel http 12345 --domain foo.com &
 client_pid=$!
 
 # Start the nc TCP server
@@ -35,7 +35,7 @@ exec $cur_dir/ping.py 12345 &
 http_server_pid1=$!
 
 sleep 1
-response=$(curl -s -H "Host: foo.example" http://localhost:12345/ping?query=tunneld)
+response=$(curl -s -H "Host: foo.com" http://localhost:12345/ping?query=tunneld)
 if [[ $response != "pong=tunneld" ]]; then
 	echo "Test failed: Response is not pong=tunneld"
 	exit 1
@@ -43,21 +43,21 @@ fi
 
 # kill the client and register again
 kill -SIGINT $client_pid
-exec $root_dir/target/debug/tunnel http 12345 --subdomain foo &
+exec $root_dir/target/debug/tunnel http 12345 --subdomain foo.com &
 client_pid=$!
 
-exec $root_dir/target/debug/tunnel http 12346 --subdomain bar &
+exec $root_dir/target/debug/tunnel http 12346 --subdomain bar.com &
 client_pid2=$!
 exec $cur_dir/ping.py 12346 &
 http_server_pid2=$!
 
-response=$(curl -s -H "Host: foo.example" http://localhost:12345/ping?query=server1)
+response=$(curl -s -H "Host: foo.com" http://localhost:12345/ping?query=server1)
 if [[ $response != "pong=server1" ]]; then
 	echo "Test failed: Response is not pong=tunneld"
 	exit 1
 fi
 
-response=$(curl -s -H "Host: bar.example" http://localhost:12345/ping?query=server2)
+response=$(curl -s -H "Host: bar.com" http://localhost:12345/ping?query=server2)
 if [[ $response != "pong=server2" ]]; then
 	echo "Test failed: Response is not pong=tunneld"
 	exit 1
