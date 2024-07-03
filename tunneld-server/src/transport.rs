@@ -1,20 +1,22 @@
 use std::convert::Infallible;
+use std::io::Write;
 use std::sync::Arc;
 
-use anyhow::Context as _;
-use bytes::Bytes;
+use anyhow::{Context as _, Result};
+use bytes::{BufMut, Bytes};
 use dashmap::DashMap;
 use http::HeaderValue;
 use http_body::Frame;
 use http_body_util::combinators::BoxBody;
-use http_body_util::StreamBody;
-use hyper::body::Body;
+use http_body_util::{BodyExt, Limited, StreamBody};
+use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::io::AsyncWriteExt;
 use tokio::{io, select, spawn, sync::mpsc};
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tracing::{debug, info};
@@ -61,10 +63,7 @@ impl HttpTunnel {
 static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
 
 impl HttpTunnel {
-    async fn call<T: Body + std::fmt::Debug>(
-        &self,
-        req: Request<T>,
-    ) -> Response<BoxBody<Bytes, Infallible>> {
+    async fn call(&self, req: Request<Incoming>) -> Response<BoxBody<Bytes, Infallible>> {
         let host = req.headers().get("host").unwrap_or(&EMPTY_HOST);
         let host = host.to_str().unwrap_or_default();
         // match the host
@@ -103,7 +102,7 @@ impl HttpTunnel {
             .await
             .context("failed to receive data_sender")
             .unwrap();
-        let _data_sender = {
+        let data_sender = {
             match data_sender {
                 event::ConnChanDataType::DataSender(sender) => sender,
                 _ => panic!(
@@ -111,16 +110,64 @@ impl HttpTunnel {
                 ),
             }
         };
+        let raw_req = request_to_bytes(req).await.unwrap();
+        // send the raw request to the tunnel
+        data_sender.send(raw_req).await.unwrap();
 
-        // read data from conn_event_chan_rx, write data to tunnel
-        // read data from tunnel, write data to data_sender
+        // response to user http request by sending data to outbound_rx
+        let (outbound_tx, outbound_rx) = mpsc::channel::<Result<Frame<Bytes>, Infallible>>(1024);
 
-        let chunks: Vec<Result<_, Infallible>> =
-            vec![Ok(Frame::data(Bytes::from_static(b"Hello world!")))];
-        let stream = futures_util::stream::iter(chunks);
+        // read the response from the tunnel and send it back to the user
+        tokio::spawn(async move {
+            while let Some(data) = conn_event_chan_rx.recv().await {
+                match data {
+                    event::ConnChanDataType::Data(data) => {
+                        if data.is_empty() {
+                            // means no more data
+                            break;
+                        }
+                        let frame = Frame::data(Bytes::from(data));
+                        let _ = outbound_tx.send(Ok(frame)).await;
+                    }
+                    _ => {
+                        panic!("unexpected data type");
+                    }
+                }
+            }
+        });
+
+        let stream = ReceiverStream::new(outbound_rx);
         let body = BoxBody::new(StreamBody::new(stream));
         Response::builder().body(body).unwrap()
     }
+}
+
+// TODO(sword): use stream
+async fn request_to_bytes(req: Request<Incoming>) -> Result<Vec<u8>> {
+    let (parts, body) = req.into_parts();
+    let mut buf = vec![].writer();
+
+    // e.g. GET / HTTP/1.1
+    write!(
+        buf,
+        "{} {} {:?}\r\n",
+        parts.method, parts.uri, parts.version
+    )?;
+    for (key, value) in parts.headers.iter() {
+        write!(buf, "{}: {}\r\n", key, value.to_str().unwrap())?;
+    }
+    let _ = buf.write(b"\r\n")?;
+
+    // TODO(sword): convert to stream
+    let body = Limited::new(body, 1024 * 1024)
+        .collect()
+        .await
+        .map_err(|_| anyhow::anyhow!("failed to collect body"))?
+        .to_bytes();
+    buf.write(body.to_vec().as_slice())
+        .context("failed to convert body to bytes")?;
+
+    Ok(buf.into_inner())
 }
 
 impl EventBus {
