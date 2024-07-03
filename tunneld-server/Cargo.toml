@@ -27,6 +27,8 @@ dashmap = "6.0.1"
 bytes = "1.6.0"
 http-body-util = { version = "0.1.2" }
 http = "1.1.0"
+http-body = "1.0.0"
+futures-util = "0.3.30"
 
 [[bin]]
 name = "tunneld"
