@@ -1,7 +1,7 @@
+use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
-use bytes::Bytes;
 
 pub struct Event {
     pub resp: oneshot::Sender<Option<Status>>,
@@ -28,8 +28,8 @@ pub enum Payload {
 pub type ConnEventChan = mpsc::Sender<ConnEvent>;
 
 pub enum ConnEvent {
-    Add(Conn),
-    Remove(String),
+    Add(ConnWithID),
+    Remove(Bytes),
 }
 
 // this channel has two purposes:
@@ -39,8 +39,12 @@ pub enum ConnEvent {
 // the server will send `Data` through this channel.
 pub type ConnChan = mpsc::Sender<ConnChanDataType>;
 
+pub struct ConnWithID {
+    pub id: Bytes,
+    pub conn: Conn,
+}
+
 pub struct Conn {
-    pub id: String,
     pub chan: ConnChan,
     // when the server receives `Close` action from `data` streaming,
     // the server will cancel the connection.

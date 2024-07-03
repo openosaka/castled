@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 pub struct Handler {
     event_tx: mpsc::Sender<event::Event>,
-    connections: Arc<DashMap<String, event::Conn>>,
+    connections: Arc<DashMap<Bytes, event::Conn>>,
     close: CancellationToken,
 
     _priv: (),
@@ -236,21 +236,20 @@ impl TunnelService for Handler {
                     Some(connection) = conn_event_chan_rx.recv() => {
                         match connection {
                             event::ConnEvent::Add(connection) => {
-                                debug!("new user connection {}", connection.id);
-                                // receive new connection
-                                let connection_id = connection.id.to_string();
-                                connections.insert(connection.id.clone(), connection);
+                                debug!("new user connection {}", String::from_utf8_lossy(connection.id.to_vec().as_slice()));
+                                let con2 = String::from_utf8_lossy(connection.id.to_vec().as_slice()).to_string();
+                                connections.insert(connection.id, connection.conn);
                                 outbound_streaming_tx
                                     .send(Ok(Control {
                                         command: Command::Work as i32,
-                                        payload: Some(Payload::Work(WorkPayload { connection_id })),
+                                        payload: Some(Payload::Work(WorkPayload { connection_id: con2 })),
                                     }))
                                     .await
                                     .context("failed to send work command")
                                     .unwrap();
                             }
                             event::ConnEvent::Remove(connection_id) => {
-                                debug!("remove user connection: {}", connection_id);
+                                debug!("remove user connection: {}", String::from_utf8_lossy(connection_id.to_vec().as_slice()));
                                 connections.remove(&connection_id);
                             }
                         }
@@ -285,9 +284,10 @@ impl TunnelService for Handler {
                     Some(traffic) = inbound_stream.next() => {
                         match traffic {
                             Ok(traffic) => {
-                                let connection_id = traffic.connection_id;
+                                let connection_id_str = traffic.connection_id;
+                                let connection_id = connection_id_str.as_bytes();
                                 let connection = connections
-                                    .get(&connection_id)
+                                    .get(&Bytes::copy_from_slice(connection_id))
                                     .context("connection not found")
                                     .unwrap();
                                 let connection = connection.value();
@@ -296,7 +296,7 @@ impl TunnelService for Handler {
                                     Ok(traffic_to_server::Action::Start) => {
                                         debug!(
                                             "received start action from connection {}, I am gonna start streaming",
-                                            connection_id,
+                                            connection_id_str,
                                         );
                                         if started {
                                             error!("duplicate start action");
@@ -334,7 +334,7 @@ impl TunnelService for Handler {
                                     Ok(traffic_to_server::Action::Sending) => {
                                         debug!(
                                             "client is sending traffic, connection_id: {}",
-                                            connection_id
+                                            connection_id_str
                                         );
                                         // client -> server
                                         connection
@@ -346,12 +346,12 @@ impl TunnelService for Handler {
                                     Ok(traffic_to_server::Action::Finished) => {
                                         debug!(
                                             "client finished sending traffic, connection_id: {}",
-                                            connection_id
+                                            connection_id_str
                                         );
                                         connection.chan.send(event::ConnChanDataType::Data(vec![])).await.unwrap();
                                     }
                                     Ok(traffic_to_server::Action::Close) => {
-                                        debug!("client closed streaming, connection_id: {}", connection_id);
+                                        debug!("client closed streaming, connection_id: {}", connection_id_str);
                                         // notify tcp manager to close the user connection
                                         connection.cancel.cancel();
                                     }

@@ -28,10 +28,14 @@ use tunneld_pkg::{
 };
 use uuid::Uuid;
 
+static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
+
 pub struct EventBus {
     vhttp_port: u16,
     _domain: String,
-    http_tunnel: HttpTunnel,
+    // tunneld provides a vhttp server for responding requests to the tunnel
+    // which is used different subdomains or domains, they still use the same port.
+    vhttp_tunnel: HttpTunnel,
 }
 
 #[derive(Clone)]
@@ -76,11 +80,7 @@ impl HttpTunnel {
     ) {
         self.subdomains.insert(subdomain, conn_event_chan);
     }
-}
 
-static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
-
-impl HttpTunnel {
     async fn call(&self, req: Request<Incoming>) -> Response<BoxBody<Bytes, Infallible>> {
         let host = req.headers().get("host").unwrap_or(&EMPTY_HOST);
         let host = host.to_str().unwrap_or_default();
@@ -116,10 +116,12 @@ impl HttpTunnel {
         let cancel = cancel_w.clone();
 
         conn_event_sender
-            .send(event::ConnEvent::Add(event::Conn {
-                id: connection_id,
-                chan: conn_chan,
-                cancel: cancel_w,
+            .send(event::ConnEvent::Add(event::ConnWithID {
+                id: Bytes::from(connection_id),
+                conn: event::Conn {
+                    chan: conn_chan,
+                    cancel: cancel_w,
+                },
             }))
             .await
             .unwrap();
@@ -209,7 +211,7 @@ impl EventBus {
         Self {
             vhttp_port,
             _domain: domain,
-            http_tunnel: HttpTunnel {
+            vhttp_tunnel: HttpTunnel {
                 domains: DashMap::new(),
                 subdomains: DashMap::new(),
             },
@@ -218,28 +220,29 @@ impl EventBus {
 
     pub async fn listen(self, mut receiver: mpsc::Receiver<event::Event>) {
         let this = Arc::new(self);
+        let this2 = Arc::clone(&this);
 
+        let http1_builder = Arc::new(http1::Builder::new());
         {
             let vhttp_listener = create_listener(this.vhttp_port).await.unwrap();
-            let this = Arc::clone(&this);
-            let http1_builder = Arc::new(http1::Builder::new());
+            let http1_builder = Arc::clone(&http1_builder);
             tokio::spawn(async move {
-                info!("vhttp server started on port {}", this.vhttp_port);
+                info!("vhttp server started on port {}", this2.vhttp_port);
                 while let Ok((stream, _addr)) = vhttp_listener.accept().await {
                     let io = TokioIo::new(stream);
-                    let this = Arc::clone(&this);
+                    let this = Arc::clone(&this2);
                     let http1_builder = Arc::clone(&http1_builder);
 
                     tokio::task::spawn(async move {
                         let new_service = service_fn(move |req| {
-                            let http_tunnel = this.http_tunnel.clone();
+                            let http_tunnel = this.vhttp_tunnel.clone();
                             async move {
                                 Ok::<Response<BoxBody<Bytes, Infallible>>, hyper::Error>(
                                     http_tunnel.call(req).await,
                                 )
                             }
                         });
-                        let _ = http1_builder.serve_connection(io, new_service).await;
+                        http1_builder.serve_connection(io, new_service).await
                     });
                 }
             });
@@ -279,12 +282,9 @@ impl EventBus {
                         continue;
                     }
 
-                    if port != 0 {
-                        // we need to start a new http server on this port
-                        //
-                    } else if !subdomain.is_empty() {
+                    if !subdomain.is_empty() {
                         // forward the http request from this subdomain to control server.
-                        if this.http_tunnel.subdomain_registered(subdomain.clone()) {
+                        if this.vhttp_tunnel.subdomain_registered(subdomain.clone()) {
                             event
                                 .resp
                                 .send(Some(Status::already_exists("subdomain already registered")))
@@ -296,16 +296,16 @@ impl EventBus {
                             let this3 = Arc::clone(&this);
                             tokio::spawn(async move {
                                 event.cancel.cancelled().await;
-                                this3.http_tunnel.unregister_subdomain(subdomain2);
+                                this3.vhttp_tunnel.unregister_subdomain(subdomain2);
                             });
 
-                            this.http_tunnel
+                            this.vhttp_tunnel
                                 .register_subdomain(subdomain, event.conn_event_chan.clone());
                             event.resp.send(None).unwrap(); // success
                         }
                     } else if !domain.is_empty() {
                         // forward the http request from this domain to control server.
-                        if this.http_tunnel.domain_registered(domain.clone()) {
+                        if this.vhttp_tunnel.domain_registered(domain.clone()) {
                             event
                                 .resp
                                 .send(Some(Status::already_exists("domain already registered")))
@@ -317,15 +317,67 @@ impl EventBus {
                             let this4 = Arc::clone(&this);
                             tokio::spawn(async move {
                                 event.cancel.cancelled().await;
-                                this4.http_tunnel.unregister_domain(domain2);
+                                this4.vhttp_tunnel.unregister_domain(domain2);
                             });
 
-                            this.http_tunnel
+                            this.vhttp_tunnel
                                 .register_domain(domain, event.conn_event_chan.clone());
                             event.resp.send(None).unwrap(); // success
                         }
+                    } else if port != 0 {
+                        let http1_builder = Arc::clone(&http1_builder);
+
+                        let listener = create_listener(port).await;
+                        if listener.is_err() {
+                            if let Err(err) = event.resp.send(Some(listener.unwrap_err())) {
+                                debug!("failed to send response to register event: {:?}", err);
+                            }
+                            continue; // just continue to the next event
+                        }
+                        event.resp.send(None).unwrap(); // success
+                        let listener = listener.unwrap();
+
+                        tokio::spawn(async move {
+                            info!("listen http on {}", port);
+
+                            let conn_event_chan = event.conn_event_chan;
+
+                            loop {
+                                tokio::select! {
+                                    _ = event.cancel.cancelled() => {
+                                        info!("closing http listener on {}", port);
+                                        return;
+                                    }
+                                    Ok((stream, _)) = listener.accept() => {
+                                        let http1_builder = Arc::clone(&http1_builder);
+                                        let conn_event_chan = conn_event_chan.clone();
+                                            let io = TokioIo::new(stream);
+
+                                            tokio::task::spawn(async move {
+                                                let conn_event_chan = conn_event_chan.clone();
+                                                let new_service = service_fn(move |req| {
+                                                    let conn_event_chan = conn_event_chan.clone();
+                                                    async move {
+                                                        Ok::<
+                                                            Response<BoxBody<Bytes, Infallible>>,
+                                                            hyper::Error,
+                                                        >(
+                                                            HttpTunnel::handle_http_request(
+                                                                req,
+                                                                conn_event_chan,
+                                                            )
+                                                            .await,
+                                                        )
+                                                    }
+                                                });
+                                                http1_builder.serve_connection(io, new_service).await
+                                            });
+                                    }
+                                }
+                            }
+                        });
                     } else {
-                        unreachable!();
+                        unreachable!("maybe give it a random port or subdomain, I don't have this requirement yet.");
                     }
                 }
             }
@@ -361,15 +413,18 @@ impl EventBus {
                     }
                     let (stream, _addr) = result.unwrap();
                     let connection_id = Uuid::new_v4().to_string();
+                    let connection_id_bytes = Bytes::from(connection_id.clone());
                     let (data_channel, mut data_channel_rx) = mpsc::channel(1024);
 
                     let cancel_w = CancellationToken::new();
                     let cancel = cancel_w.clone();
 
-                    let event = event::Conn{
-                        id: connection_id.clone(),
-                        chan: data_channel.clone(),
-                        cancel: cancel_w,
+                    let event = event::ConnWithID{
+                        id: connection_id_bytes.clone(),
+                        conn: event::Conn{
+                            chan: data_channel.clone(),
+                            cancel: cancel_w,
+                        }
                     };
                     conn_event_chan.send(event::ConnEvent::Add(event)).await.unwrap();
                     let data_sender = data_channel_rx.recv().await.context("failed to receive data_sender").unwrap();
@@ -401,7 +456,7 @@ impl EventBus {
                             _ = async { tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remote) } => {
                                 debug!("closing user connection {}", connection_id);
                                 conn_event_chan_for_removing
-                                    .send(event::ConnEvent::Remove(connection_id))
+                                    .send(event::ConnEvent::Remove(connection_id_bytes))
                                     .await
                                     .context("notify server to remove connection channel")
                                     .unwrap();

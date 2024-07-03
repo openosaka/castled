@@ -81,13 +81,10 @@ impl<'a> Client<'a> {
         }
 
         let results = join_all(tasks).await;
-
-        // log the errors
-        results.iter().for_each(|r| {
-            if let Err(e) = r {
-                error!("{:?}", e);
-            }
-        });
+        // check if there is any error, if so, return the first error
+        for result in results {
+            result?
+        }
 
         Ok(())
     }
@@ -138,11 +135,10 @@ impl<'a> Client<'a> {
                 Ok(())
             }
             register_resp = register => {
-                debug!("registered tunnel");
                 match register_resp {
                     Err(e) => {
                         error!("failed to register tunnel: {:?}", e);
-                        Ok(())
+                        Err(e.into())
                     }
                     Ok(register_resp) => {
                         self.handle_control_stream(cancel, rpc_client, register_resp, local_port).await
@@ -170,8 +166,7 @@ impl<'a> Client<'a> {
                     }
                     let result = result.unwrap();
                     if result.is_err() {
-                        error!("failed to receive control message: {:?}", result);
-                        break;
+                        return Err(result.unwrap_err().into());
                     }
                     let control = result.unwrap();
                     match Command::try_from(control.command) {
