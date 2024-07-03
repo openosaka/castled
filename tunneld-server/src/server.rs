@@ -175,7 +175,10 @@ impl TunnelService for Handler {
 
         match req.tunnel.as_ref().unwrap().config.as_ref().unwrap() {
             Tcp(tcp) => {
-                debug!("registering tcp tunnel on remote_port: {:?}", tcp.remote_port);
+                debug!(
+                    "registering tcp tunnel on remote_port: {:?}",
+                    tcp.remote_port
+                );
                 let remote_port = tcp.remote_port.to_owned();
                 event_tx
                     .send(event::Event {
@@ -289,7 +292,6 @@ impl TunnelService for Handler {
                                     .unwrap();
                                 let connection = connection.value();
 
-                                use std::convert::TryFrom;
                                 match traffic_to_server::Action::try_from(traffic.action) {
                                     Ok(traffic_to_server::Action::Start) => {
                                         debug!(
@@ -314,6 +316,7 @@ impl TunnelService for Handler {
                                         tokio::spawn(async move {
                                             loop {
                                                 tokio::select! {
+                                                    // server -> client
                                                     Some(data) = transfer_rx.recv() => {
                                                         outbound_tx
                                                             .send(Ok(TrafficToClient { data }))
@@ -333,6 +336,7 @@ impl TunnelService for Handler {
                                             "client is sending traffic, connection_id: {}",
                                             connection_id
                                         );
+                                        // client -> server
                                         connection
                                             .chan
                                             .send(event::ConnChanDataType::Data(traffic.data))

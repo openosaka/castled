@@ -278,7 +278,8 @@ async fn handle_work_traffic(
         loop {
             tokio::select! {
                 Some(traffic) = streaming_response.next() => {
-                    transfer_tx.send(traffic.unwrap()).await.unwrap();
+                    let traffic = traffic.unwrap();
+                    transfer_tx.send(traffic).await.unwrap();
                 }
                 _ = transfer_tx.closed() => {
                     break;
