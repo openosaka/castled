@@ -1,11 +1,14 @@
 use std::net::SocketAddr;
 
+use bytes::Bytes;
 use tests::{free_port, is_port_listening};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tunneld_client::Client;
-use bytes::Bytes;
-use wiremock::{matchers::{method, path}, Mock, MockServer, ResponseTemplate};
+use wiremock::{
+    matchers::{method, path},
+    Mock, MockServer, ResponseTemplate,
+};
 
 fn init() {
     let _ = tracing_subscriber::fmt::try_init(); // the tracing subscriber is initialized only once
@@ -98,7 +101,7 @@ async fn client_register_and_close_then_register_again() {
 }
 
 #[tokio::test]
-async fn register_http_tunnel() {
+async fn register_http_tunnel_with_subdomain() {
     let mock_local_server = MockServer::start().await;
     let local_port = {
         let uri = mock_local_server.uri();
@@ -108,23 +111,41 @@ async fn register_http_tunnel() {
     Mock::given(method("GET"))
         .and(path("/hello"))
         .respond_with(ResponseTemplate::new(200).set_body_string(mock_body))
-        .mount(&mock_local_server);
-    
+        .mount(&mock_local_server)
+        .await;
+
     init();
     let server = start_server().await;
     let close_client = server.cancel.clone();
-    let remote_port = free_port().unwrap();
     let control_addr = server.control_addr().clone();
-    
+
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_http_tunnel("test".to_string(), local_port, remote_port, Bytes::from(""), Bytes::from(""));
+        client.add_http_tunnel(
+            "test".to_string(),
+            local_port,
+            0,
+            Bytes::from("foo"),
+            Bytes::from(""),
+        );
 
         let client_exit = client.run(close_client).await;
         assert!(client_exit.is_ok());
     });
 
     sleep(tokio::time::Duration::from_millis(100)).await;
+
+    let http_client = reqwest::Client::new();
+    let request = http_client
+        .request(
+            http::method::Method::GET,
+            format!("http://localhost:{}/hello", local_port),
+        )
+        .header("Host", "foo.example.com")
+        .build()
+        .unwrap();
+    let response = http_client.execute(request).await.unwrap();
+    assert_eq!(response.status(), 200);
 
     server.cancel.cancel();
 
