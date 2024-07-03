@@ -1,6 +1,10 @@
 #!/bin/bash
 # set -x
 
+root_dir=$(git rev-parse --show-toplevel)
+cur_dir=$root_dir/tests/e2e
+source $cur_dir/util.sh
+
 cargo build
 
 # Function to clean up processes
@@ -16,13 +20,12 @@ trap cleanup EXIT
 # Start the tunnel server
 exec ./target/debug/tunneld &
 server_pid=$!
-
-# Give the server some time to start
-sleep 1
+wait_port 6610
 
 # Start the tunnel client
 exec ./target/debug/tunnel tcp 12345 --remote-port 9992 &
 client_pid=$!
+wait_port 9992
 
 start=$(date +%s.%N)
 curl http://localhost:9992 --max-time 3 || true # should failed immediately

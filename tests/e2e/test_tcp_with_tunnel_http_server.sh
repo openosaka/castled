@@ -1,6 +1,10 @@
 #!/bin/bash
 # set -x
 
+root_dir=$(git rev-parse --show-toplevel)
+cur_dir=$root_dir/tests/e2e
+source $cur_dir/util.sh
+
 cargo build
 
 # Function to clean up processes
@@ -17,19 +21,17 @@ trap cleanup EXIT
 # Start the tunnel server
 exec ./target/debug/tunneld &
 server_pid=$!
-
-# Give the server some time to start
-sleep 1
+wait_port 6610
 
 # Start the tunnel client
 exec ./target/debug/tunnel tcp 8881 --remote-port 9992 &
 client_pid=$!
+wait_port 9992
 
 # Start the nc TCP server
 exec python3 -m http.server 8881 > /dev/null 2>&1 &
 http_server_pid=$!
-
-sleep 1
+wait_port 8881
 
 for i in {1..200}
 do
