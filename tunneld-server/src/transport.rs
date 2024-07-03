@@ -8,13 +8,14 @@ use dashmap::DashMap;
 use http::HeaderValue;
 use http_body::Frame;
 use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Limited, StreamBody};
+use http_body_util::{BodyExt, Full, Limited, StreamBody};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc::Sender;
 use tokio::{io, select, spawn, sync::mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -35,10 +36,27 @@ pub struct EventBus {
 
 #[derive(Clone)]
 struct HttpTunnel {
+    domains: DashMap<Bytes, mpsc::Sender<event::ConnEvent>>,
     subdomains: DashMap<Bytes, mpsc::Sender<event::ConnEvent>>,
 }
 
 impl HttpTunnel {
+    fn register_domain(&self, domain: Bytes, conn_event_chan: mpsc::Sender<event::ConnEvent>) {
+        self.domains.insert(domain, conn_event_chan);
+    }
+
+    fn unregister_domain(&self, domain: Bytes) {
+        self.domains.remove(&domain);
+    }
+
+    fn domain_registered(&self, domain: Bytes) -> bool {
+        self.domains.contains_key(&domain)
+    }
+
+    fn get_domain(&self, domain: Bytes) -> Option<mpsc::Sender<event::ConnEvent>> {
+        self.domains.get(&domain).map(|x| x.value().clone())
+    }
+
     fn subdomain_registered(&self, subdomain: Bytes) -> bool {
         self.subdomains.contains_key(&subdomain)
     }
@@ -66,27 +84,36 @@ impl HttpTunnel {
     async fn call(&self, req: Request<Incoming>) -> Response<BoxBody<Bytes, Infallible>> {
         let host = req.headers().get("host").unwrap_or(&EMPTY_HOST);
         let host = host.to_str().unwrap_or_default();
-        // match the host
         debug!("host: {}", host);
+        // match the host
+        let result = self.get_domain(Bytes::copy_from_slice(host.as_bytes()));
+        if result.is_some() {
+            return Self::handle_http_request(req, result.unwrap()).await;
+        }
 
         // match subdomain
         let subdomain = host.split('.').next().unwrap_or_default();
         let subdomain = Bytes::copy_from_slice(subdomain.as_bytes());
         let result = self.get_subdomain(subdomain);
         if result.is_none() {
-            let chunks: Vec<Result<_, Infallible>> =
-                vec![Ok(Frame::data(Bytes::from_static(b"tunnel not found")))];
-            let stream = futures_util::stream::iter(chunks);
-            let body = BoxBody::new(StreamBody::new(stream));
-            return Response::builder().status(404).body(body).unwrap();
+            return Response::builder()
+                .status(404)
+                .body(BoxBody::new(Full::new(Bytes::from("tunnel not found"))))
+                .unwrap();
         }
 
-        let conn_event_sender = result.unwrap();
+        Self::handle_http_request(req, result.unwrap()).await
+    }
+
+    async fn handle_http_request(
+        req: Request<Incoming>,
+        conn_event_sender: Sender<event::ConnEvent>,
+    ) -> Response<BoxBody<Bytes, Infallible>> {
         let connection_id = Uuid::new_v4().to_string();
         let (conn_chan, mut conn_event_chan_rx) = mpsc::channel(1024);
 
         let cancel_w = CancellationToken::new();
-        let _cancel = cancel_w.clone();
+        let cancel = cancel_w.clone();
 
         conn_event_sender
             .send(event::ConnEvent::Add(event::Conn {
@@ -119,18 +146,25 @@ impl HttpTunnel {
 
         // read the response from the tunnel and send it back to the user
         tokio::spawn(async move {
-            while let Some(data) = conn_event_chan_rx.recv().await {
-                match data {
-                    event::ConnChanDataType::Data(data) => {
-                        if data.is_empty() {
-                            // means no more data
-                            break;
-                        }
-                        let frame = Frame::data(Bytes::from(data));
-                        let _ = outbound_tx.send(Ok(frame)).await;
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        break;
                     }
-                    _ => {
-                        panic!("unexpected data type");
+                    Some(data) = conn_event_chan_rx.recv() => {
+                        match data {
+                            event::ConnChanDataType::Data(data) => {
+                                if data.is_empty() {
+                                    // means no more data
+                                    break;
+                                }
+                                let frame = Frame::data(Bytes::from(data));
+                                let _ = outbound_tx.send(Ok(frame)).await;
+                            }
+                            _ => {
+                                panic!("unexpected data type");
+                            }
+                        }
                     }
                 }
             }
@@ -176,6 +210,7 @@ impl EventBus {
             vhttp_port,
             _domain: domain,
             http_tunnel: HttpTunnel {
+                domains: DashMap::new(),
                 subdomains: DashMap::new(),
             },
         }
@@ -270,7 +305,27 @@ impl EventBus {
                         }
                     } else if !domain.is_empty() {
                         // forward the http request from this domain to control server.
-                        continue;
+                        if this.http_tunnel.domain_registered(domain.clone()) {
+                            event
+                                .resp
+                                .send(Some(Status::already_exists("domain already registered")))
+                                .unwrap();
+                        } else {
+                            let domain2 = domain.clone();
+
+                            // unregister the vhost when client disconnects.
+                            let this4 = Arc::clone(&this);
+                            tokio::spawn(async move {
+                                event.cancel.cancelled().await;
+                                this4.http_tunnel.unregister_domain(domain2);
+                            });
+
+                            this.http_tunnel
+                                .register_domain(domain, event.conn_event_chan.clone());
+                            event.resp.send(None).unwrap(); // success
+                        }
+                    } else {
+                        unreachable!();
                     }
                 }
             }
