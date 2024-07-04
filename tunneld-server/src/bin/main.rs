@@ -19,12 +19,12 @@ async fn main() {
             // Something really weird happened. So just panic
             panic!("Failed to listen for the ctrl-c signal: {:?}", e);
         }
-		info!("Received ctrl-c signal. Shutting down...");
+        info!("Received ctrl-c signal. Shutting down...");
         cancel_w.cancel();
     });
 
     let server = Server::new(config);
-    if let Err(err) = server.run(cancel).await {
+    if let Err(err) = server.run(cancel.cancelled()).await {
         eprintln!("server error: {:?}", err);
     }
 }

@@ -1579,6 +1579,7 @@ dependencies = [
  "tokio-util",
  "tracing-subscriber",
  "tunneld-client",
+ "tunneld-pkg",
  "tunneld-server",
  "wiremock",
 ]

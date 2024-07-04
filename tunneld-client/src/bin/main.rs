@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use std::net::SocketAddr;
+use tunneld_pkg::shutdown;
 
 use clap::{Parser, Subcommand};
 use tokio::signal;
@@ -77,5 +78,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    client.run(cancel).await
+    client
+        .run(shutdown::ShutdownListener::from_cancellation(cancel))
+        .await
 }

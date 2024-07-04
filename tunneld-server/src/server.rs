@@ -1,13 +1,14 @@
 use bytes::Bytes;
 use std::sync::Arc;
 use std::{net::ToSocketAddrs, pin::Pin};
+use tunneld_pkg::shutdown::{self, ShutdownListener};
 
 use crate::transport::EventBus;
 use crate::Config;
 use anyhow::Context as _;
 use core::task::{Context, Poll};
 use dashmap::DashMap;
-use futures::StreamExt;
+use futures::{Future, StreamExt};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
@@ -29,17 +30,17 @@ use uuid::Uuid;
 pub struct Handler {
     event_tx: mpsc::Sender<event::Event>,
     connections: Arc<DashMap<Bytes, event::Conn>>,
-    close: CancellationToken,
+    shutdown: ShutdownListener,
 
     _priv: (),
 }
 
 impl Handler {
-    pub fn new(close: CancellationToken, event_tx: mpsc::Sender<event::Event>) -> Self {
+    pub fn new(shutdown: ShutdownListener, event_tx: mpsc::Sender<event::Event>) -> Self {
         Self {
             connections: Arc::new(DashMap::new()),
             event_tx,
-            close,
+            shutdown,
             _priv: (),
         }
     }
@@ -87,7 +88,8 @@ pub struct Server {
     control_port: u16,
     _vhttp_port: u16,
     control_server: GrpcServer,
-    events: EventBus,
+    event_bus: EventBus,
+    shutdown: shutdown::Shutdown,
 }
 
 impl Server {
@@ -102,11 +104,12 @@ impl Server {
             control_port: config.control_port,
             _vhttp_port: config.vhttp_port,
             control_server: server,
-            events,
+            event_bus: events,
+            shutdown: shutdown::Shutdown::new(),
         }
     }
 
-    pub async fn run(self, cancel: CancellationToken) -> anyhow::Result<()> {
+    pub async fn run(self, shutdown: impl Future) -> anyhow::Result<()> {
         let addr = format!("0.0.0.0:{}", self.control_port)
             .to_socket_addrs()
             .context("parse control port")?
@@ -116,23 +119,41 @@ impl Server {
 
         let (event_tx, event_rx) = mpsc::channel(1024);
 
-        let handler = Handler::new(cancel.clone(), event_tx);
-        let events = self.events;
+        let shutdown_listener_control_server = self.shutdown.listen();
+        let shutdown_listener_event_bus = self.shutdown.listen();
+
+        let handler = Handler::new(self.shutdown.listen(), event_tx);
+        let event_bus = self.event_bus;
         tokio::spawn(async move {
-            events.listen(event_rx).await;
+            event_bus
+                .listen(shutdown_listener_event_bus, event_rx)
+                .await
         });
 
         info!("starting control server on: {}", addr);
 
         let mut control_server = self.control_server;
-        let run_control_server = tokio::spawn(async move {
+        let run_control_server = async move {
             control_server
                 .add_service(TunnelServiceServer::new(handler))
-                .serve_with_shutdown(addr, cancel.cancelled())
+                .serve_with_shutdown(addr, shutdown_listener_control_server)
                 .await
-        });
+        };
 
-        let _grpc_result = tokio::join!(run_control_server);
+        tokio::select! {
+            _ = shutdown => {
+                info!("shutdown signal received, shutting down the server");
+            }
+            res = run_control_server => {
+                if let Err(err) = res {
+                    error!("server quit: {}", err);
+                }
+            }
+        }
+
+        // when close shutdown_listener, the control server will start to shutdown.
+        self.shutdown.notify();
+
         Ok(())
     }
 }
@@ -168,7 +189,6 @@ impl TunnelService for Handler {
         let cancel_listener_w = CancellationToken::new();
         let cancel_listener = cancel_listener_w.clone();
         let event_tx = self.event_tx.clone();
-        let server_closed = self.close.clone();
 
         let (resp_tx, resp_rx) = oneshot::channel();
         let (conn_event_chan_tx, mut conn_event_chan_rx) = mpsc::channel::<event::ConnEvent>(1024);
@@ -225,11 +245,12 @@ impl TunnelService for Handler {
             }
         }
 
+        let shutdown_listener = self.shutdown.clone();
         let connections = self.connections.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = server_closed.cancelled() => {
+                    _ = shutdown_listener.done() => {
                         debug!("server closed, close the control stream");
                         break;
                     }
@@ -275,12 +296,12 @@ impl TunnelService for Handler {
         let mut inbound_stream = req.into_inner();
         let (outbound_tx, outbound_rx) = mpsc::channel(1024);
 
-        let server_closed = self.close.clone();
+        let shutdown_listener = self.shutdown.clone();
         tokio::spawn(async move {
             let mut started = false;
             loop {
                 tokio::select! {
-                    _ = server_closed.cancelled() => { break }
+                    _ = shutdown_listener.done() => { break }
                     Some(traffic) = inbound_stream.next() => {
                         match traffic {
                             Ok(traffic) => {
@@ -393,7 +414,7 @@ mod tests {
         let cancel = cancel_w.clone();
 
         tokio::spawn(async move {
-            let result = server.run(cancel).await;
+            let result = server.run(cancel.cancelled()).await;
             assert!(result.is_ok());
         });
 
