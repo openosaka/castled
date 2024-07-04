@@ -21,6 +21,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tracing::{debug, info};
+use tunneld_pkg::get_with_shutdown;
+use tunneld_pkg::shutdown::ShutdownListener;
 use tunneld_pkg::{
     event,
     io::{StreamingReader, StreamingWriter, VecWrapper},
@@ -218,32 +220,43 @@ impl EventBus {
         }
     }
 
-    pub async fn listen(self, mut receiver: mpsc::Receiver<event::Event>) {
+    pub async fn listen(
+        self,
+        shutdown: ShutdownListener,
+        mut receiver: mpsc::Receiver<event::Event>,
+    ) -> anyhow::Result<()> {
         let this = Arc::new(self);
         let this2 = Arc::clone(&this);
 
         let http1_builder = Arc::new(http1::Builder::new());
         {
-            let vhttp_listener = create_listener(this.vhttp_port).await.unwrap();
+            let vhttp_listener =
+                get_with_shutdown!(create_listener(this.vhttp_port), shutdown.clone())?;
+
             let http1_builder = Arc::clone(&http1_builder);
             tokio::spawn(async move {
                 info!("vhttp server started on port {}", this2.vhttp_port);
-                while let Ok((stream, _addr)) = vhttp_listener.accept().await {
-                    let io = TokioIo::new(stream);
-                    let this = Arc::clone(&this2);
-                    let http1_builder = Arc::clone(&http1_builder);
+                loop {
+                    tokio::select! {
+                        _ = shutdown.clone() => {},
+                        Ok((stream, _addr)) = vhttp_listener.accept() => {
+                            let io = TokioIo::new(stream);
+                            let this = Arc::clone(&this2);
+                            let http1_builder = Arc::clone(&http1_builder);
 
-                    tokio::task::spawn(async move {
-                        let new_service = service_fn(move |req| {
-                            let http_tunnel = this.vhttp_tunnel.clone();
-                            async move {
-                                Ok::<Response<BoxBody<Bytes, Infallible>>, hyper::Error>(
-                                    http_tunnel.call(req).await,
-                                )
-                            }
-                        });
-                        http1_builder.serve_connection(io, new_service).await
-                    });
+                            tokio::task::spawn(async move {
+                                let new_service = service_fn(move |req| {
+                                    let http_tunnel = this.vhttp_tunnel.clone();
+                                    async move {
+                                        Ok::<Response<BoxBody<Bytes, Infallible>>, hyper::Error>(
+                                            http_tunnel.call(req).await,
+                                        )
+                                    }
+                                });
+                                http1_builder.serve_connection(io, new_service).await
+                            });
+                        }
+                    }
                 }
             });
         }
@@ -384,6 +397,7 @@ impl EventBus {
         }
 
         debug!("tcp manager quit");
+        Ok(())
     }
 
     async fn handle_tcp_listener(

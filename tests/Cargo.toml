@@ -9,6 +9,7 @@ tokio-util = "0.7.11"
 tracing-subscriber = "0.3.18"
 tunneld-server = { path = "../tunneld-server" }
 tunneld-client = { path = "../tunneld-client" }
+tunneld-pkg = { path = "../tunneld-pkg" }
 wiremock = "0.6.0"
 bytes ={ version = "1.6.0" }
 reqwest = "0.12.5"

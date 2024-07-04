@@ -5,6 +5,7 @@ use tests::{free_port, is_port_listening};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tunneld_client::Client;
+use tunneld_pkg::shutdown::ShutdownListener;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -28,7 +29,9 @@ async fn client_register_tcp() {
         let mut client = Client::new(&control_addr).unwrap();
         client.add_tcp_tunnel("test".to_string(), 1234 /* no matter */, remote_port);
 
-        let client_exit = client.run(close_client).await;
+        let client_exit = client
+            .run(ShutdownListener::from_cancellation(close_client))
+            .await;
         assert!(client_exit.is_ok());
     });
 
@@ -66,7 +69,9 @@ async fn client_register_and_close_then_register_again() {
         client.add_tcp_tunnel("test".to_string(), 1234 /* no matter */, remote_port);
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
-        let client_exit = client.run(close_client).await;
+        let client_exit = client
+            .run(ShutdownListener::from_cancellation(close_client))
+            .await;
         assert!(client_exit.is_ok());
     });
 
@@ -87,7 +92,9 @@ async fn client_register_and_close_then_register_again() {
         client.add_tcp_tunnel("test".to_string(), 1234, remote_port);
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
-        let client_exit = client.run(close_client).await;
+        let client_exit = client
+            .run(ShutdownListener::from_cancellation(close_client))
+            .await;
         assert!(client_exit.is_ok());
     });
 
@@ -129,7 +136,9 @@ async fn register_http_tunnel_with_subdomain() {
             Bytes::from(""),
         );
 
-        let client_exit = client.run(close_client).await;
+        let client_exit = client
+            .run(ShutdownListener::from_cancellation(close_client))
+            .await;
         assert!(client_exit.is_ok());
     });
 
@@ -177,7 +186,7 @@ async fn start_server() -> TestServer {
     let cancel_w = CancellationToken::new();
     let cancel = cancel_w.clone();
     tokio::spawn(async move {
-        server.run(cancel).await;
+        server.run(cancel.cancelled()).await;
     });
     sleep(tokio::time::Duration::from_millis(200)).await;
 

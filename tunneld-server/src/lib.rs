@@ -10,12 +10,12 @@ pub struct Config {
 
     /// Domain name for the http server, it could be empty,
     /// the client can't register with domain if it's empty.
-    /// 
+    ///
     /// e.g. "tunnel.example.com", don't include the protocol.
     #[arg(long, default_value = "", required = false)]
     pub domain: String,
 }
 
-mod transport;
 mod server;
+mod transport;
 pub use server::*;

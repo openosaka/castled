@@ -9,10 +9,12 @@ use tokio::{
     sync::mpsc,
 };
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-use tokio_util::sync::CancellationToken;
 use tonic::{transport::Channel, Streaming};
 use tracing::{debug, error};
-use tunneld_pkg::io::{StreamingReader, StreamingWriter, TrafficToServerWrapper};
+use tunneld_pkg::{
+    io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
+    select_with_shutdown, shutdown,
+};
 use tunneld_protocol::pb::{
     control::Payload,
     traffic_to_server,
@@ -50,7 +52,7 @@ impl<'a> Client<'a> {
         })
     }
 
-    pub async fn run(&mut self, cancel: CancellationToken) -> Result<()> {
+    pub async fn run(&mut self, shutdown_listener: shutdown::ShutdownListener) -> Result<()> {
         let mut tasks = Vec::new();
         for tcp_tunnel in self.tcp_tunnels.iter() {
             let tunnel = Tunnel {
@@ -61,7 +63,11 @@ impl<'a> Client<'a> {
                 })),
                 ..Default::default()
             };
-            tasks.push(self.handle_tunnel(cancel.clone(), tunnel, tcp_tunnel.local_port));
+            tasks.push(self.handle_tunnel(
+                shutdown_listener.clone(),
+                tunnel,
+                tcp_tunnel.local_port,
+            ));
         }
 
         for http_tunnel in self.http_tunnels.iter() {
@@ -77,7 +83,11 @@ impl<'a> Client<'a> {
                 })),
                 ..Default::default()
             };
-            tasks.push(self.handle_tunnel(cancel.clone(), tunnel, http_tunnel.local_port));
+            tasks.push(self.handle_tunnel(
+                shutdown_listener.clone(),
+                tunnel,
+                http_tunnel.local_port,
+            ));
         }
 
         let results = join_all(tasks).await;
@@ -120,7 +130,7 @@ impl<'a> Client<'a> {
 
     async fn handle_tunnel(
         &self,
-        cancel: CancellationToken,
+        shutdown_listener: shutdown::ShutdownListener,
         tunnel: Tunnel,
         local_port: u16,
     ) -> Result<()> {
@@ -129,28 +139,29 @@ impl<'a> Client<'a> {
             client_version: "todo".to_string(),
             tunnel: Some(tunnel),
         });
-        tokio::select! {
-            _ = cancel.cancelled() => {
-                debug!("cancelling tcp tunnel");
-                Ok(())
-            }
-            register_resp = register => {
-                match register_resp {
-                    Err(e) => {
-                        error!("failed to register tunnel: {:?}", e);
-                        Err(e.into())
-                    }
-                    Ok(register_resp) => {
-                        self.handle_control_stream(cancel, rpc_client, register_resp, local_port).await
-                    }
+
+        select_with_shutdown!(register, shutdown_listener.done(), register_resp, {
+            match register_resp {
+                Err(e) => {
+                    error!("failed to register tunnel: {:?}", e);
+                    Err(e.into())
+                }
+                Ok(register_resp) => {
+                    self.handle_control_stream(
+                        shutdown_listener,
+                        rpc_client,
+                        register_resp,
+                        local_port,
+                    )
+                    .await
                 }
             }
-        }
+        })
     }
 
     async fn handle_control_stream(
         &self,
-        cancel: CancellationToken,
+        shutdown_listener: shutdown::ShutdownListener,
         rpc_client: TunnelServiceClient<Channel>,
         register_resp: tonic::Response<Streaming<Control>>,
         local_port: u16,
@@ -218,7 +229,7 @@ impl<'a> Client<'a> {
                         }
                     }
                 }
-                _ = cancel.cancelled() => {
+                _ = shutdown_listener.done() => {
                     debug!("cancelling tcp tunnel");
                     return Ok(());
                 }
