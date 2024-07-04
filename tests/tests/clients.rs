@@ -27,7 +27,11 @@ async fn client_register_tcp() {
 
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), 1234 /* no matter */, remote_port);
+        client.add_tcp_tunnel(
+            "test".to_string(),
+            SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
+            remote_port,
+        );
 
         let client_exit = client
             .run(ShutdownListener::from_cancellation(close_client))
@@ -66,7 +70,11 @@ async fn client_register_and_close_then_register_again() {
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), 1234 /* no matter */, remote_port);
+        client.add_tcp_tunnel(
+            "test".to_string(),
+            SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
+            remote_port,
+        );
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client
@@ -89,7 +97,11 @@ async fn client_register_and_close_then_register_again() {
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel("test".to_string(), 1234, remote_port);
+        client.add_tcp_tunnel(
+            "test".to_string(),
+            SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
+            remote_port,
+        );
 
         sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
         let client_exit = client
@@ -130,7 +142,7 @@ async fn register_http_tunnel_with_subdomain() {
         let mut client = Client::new(&control_addr).unwrap();
         client.add_http_tunnel(
             "test".to_string(),
-            local_port,
+            SocketAddr::from(([127, 0, 0, 1], local_port)),
             0,
             Bytes::from("foo"),
             Bytes::from(""),
