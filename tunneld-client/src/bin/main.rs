@@ -4,7 +4,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use tracing_subscriber::{prelude::*, EnvFilter};
+use tracing_subscriber::prelude::*;
 use tunneld_pkg::shutdown;
 
 #[derive(Parser)]
@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
     // build a `Subscriber` by combining layers with a
     // `tracing_subscriber::Registry`:
     tracing_subscriber::registry()
-        .with(console_layer.with_filter(EnvFilter::from_default_env()))
+        .with(console_layer)
         .with(tracing_subscriber::fmt::layer())
         .init();
 
