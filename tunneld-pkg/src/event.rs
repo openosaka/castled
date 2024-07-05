@@ -5,7 +5,7 @@ use tonic::Status;
 
 pub struct Event {
     pub resp: oneshot::Sender<Option<Status>>,
-    pub cancel: CancellationToken,
+    pub close_listener: CancellationToken,
     // when the tunneld-client exit, the server will cancel the listener.
     pub conn_event_chan: ConnEventChan,
     pub payload: Payload,

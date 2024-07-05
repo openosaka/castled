@@ -20,7 +20,7 @@ use tokio::{io, select, spawn, sync::mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
-use tracing::{debug, info};
+use tracing::{debug, info, info_span, Instrument as _};
 use tunneld_pkg::get_with_shutdown;
 use tunneld_pkg::shutdown::ShutdownListener;
 use tunneld_pkg::{
@@ -243,8 +243,7 @@ impl EventBus {
                             let io = TokioIo::new(stream);
                             let this = Arc::clone(&this2);
                             let http1_builder = Arc::clone(&http1_builder);
-
-                            tokio::task::spawn(async move {
+                            let handler = async move {
                                 let new_service = service_fn(move |req| {
                                     let http_tunnel = this.vhttp_tunnel.clone();
                                     async move {
@@ -254,7 +253,8 @@ impl EventBus {
                                     }
                                 });
                                 http1_builder.serve_connection(io, new_service).await
-                            });
+                            }.instrument(info_span!("vhttp_handler"));
+                            tokio::task::spawn(handler);
                         }
                     }
                 }
@@ -265,7 +265,7 @@ impl EventBus {
             match event.payload {
                 event::Payload::RegisterTcp { port } => match create_listener(port).await {
                     Ok(listener) => {
-                        let cancel = event.cancel;
+                        let cancel = event.close_listener;
                         let conn_event_chan = event.conn_event_chan;
                         let this2 = Arc::clone(&this);
                         spawn(async move {
@@ -308,7 +308,7 @@ impl EventBus {
                             // unregister the vhost when client disconnects.
                             let this3 = Arc::clone(&this);
                             tokio::spawn(async move {
-                                event.cancel.cancelled().await;
+                                event.close_listener.cancelled().await;
                                 this3.vhttp_tunnel.unregister_subdomain(subdomain2);
                             });
 
@@ -329,7 +329,7 @@ impl EventBus {
                             // unregister the vhost when client disconnects.
                             let this4 = Arc::clone(&this);
                             tokio::spawn(async move {
-                                event.cancel.cancelled().await;
+                                event.close_listener.cancelled().await;
                                 this4.vhttp_tunnel.unregister_domain(domain2);
                             });
 
@@ -357,7 +357,7 @@ impl EventBus {
 
                             loop {
                                 tokio::select! {
-                                    _ = event.cancel.cancelled() => {
+                                    _ = event.close_listener.cancelled() => {
                                         info!("closing http listener on {}", port);
                                         return;
                                     }

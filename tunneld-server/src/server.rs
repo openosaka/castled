@@ -4,7 +4,6 @@ use std::{net::ToSocketAddrs, pin::Pin};
 use tunneld_pkg::shutdown::{self, ShutdownListener};
 
 use crate::transport::EventBus;
-use crate::Config;
 use anyhow::Context as _;
 use core::task::{Context, Poll};
 use dashmap::DashMap;
@@ -29,7 +28,9 @@ use uuid::Uuid;
 
 pub struct Handler {
     event_tx: mpsc::Sender<event::Event>,
-    connections: Arc<DashMap<Bytes, event::Conn>>,
+    // bridge the connection between handler and event_bus
+    bridges: Arc<DashMap<Bytes, event::Conn>>,
+    close_sender_notifiers: Arc<DashMap<Bytes, CancellationToken>>,
     shutdown: ShutdownListener,
 
     _priv: (),
@@ -38,7 +39,8 @@ pub struct Handler {
 impl Handler {
     pub fn new(shutdown: ShutdownListener, event_tx: mpsc::Sender<event::Event>) -> Self {
         Self {
-            connections: Arc::new(DashMap::new()),
+            bridges: Arc::new(DashMap::new()),
+            close_sender_notifiers: Arc::new(DashMap::new()),
             event_tx,
             shutdown,
             _priv: (),
@@ -86,7 +88,6 @@ impl<T> Drop for CancelableReceiver<T> {
 
 pub struct Server {
     control_port: u16,
-    _vhttp_port: u16,
     control_server: GrpcServer,
     event_bus: EventBus,
     shutdown: shutdown::Shutdown,
@@ -94,15 +95,14 @@ pub struct Server {
 
 impl Server {
     /// Create a new server instance.
-    pub fn new(config: Config) -> Self {
+    pub fn new(control_port: u16, vhttp_port: u16, domain: String) -> Self {
         let server = GrpcServer::builder()
             .http2_keepalive_interval(Some(tokio::time::Duration::from_secs(60)))
             .http2_keepalive_timeout(Some(tokio::time::Duration::from_secs(3)));
-        let events = EventBus::new(config.vhttp_port, config.domain.clone());
+        let events = EventBus::new(vhttp_port, domain);
 
         Self {
-            control_port: config.control_port,
-            _vhttp_port: config.vhttp_port,
+            control_port,
             control_server: server,
             event_bus: events,
             shutdown: shutdown::Shutdown::new(),
@@ -168,7 +168,7 @@ impl TunnelService for Handler {
             return Err(status);
         }
 
-        let (outbound_streaming_tx, outbound_streaming_rx) = mpsc::channel(1024);
+        let (outbound_streaming_tx, outbound_streaming_rx) = mpsc::channel(256);
         let tenant_id = Uuid::new_v4();
         let init_command = Control {
             command: Command::Init as i32,
@@ -186,8 +186,7 @@ impl TunnelService for Handler {
                 Status::internal("failed to send control stream")
             })?;
 
-        let cancel_listener_w = CancellationToken::new();
-        let cancel_listener = cancel_listener_w.clone();
+        let register_cancel = CancellationToken::new();
         let event_tx = self.event_tx.clone();
 
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -205,7 +204,7 @@ impl TunnelService for Handler {
                         payload: event::Payload::RegisterTcp {
                             port: remote_port as u16,
                         },
-                        cancel: cancel_listener,
+                        close_listener: register_cancel.clone(),
                         conn_event_chan: conn_event_chan_tx,
                         resp: resp_tx,
                     })
@@ -221,7 +220,7 @@ impl TunnelService for Handler {
                             subdomain: Bytes::from(http.subdomain.to_owned()),
                             domain: Bytes::from(http.domain.to_owned()),
                         },
-                        cancel: cancel_listener,
+                        close_listener: register_cancel.clone(),
                         conn_event_chan: conn_event_chan_tx,
                         resp: resp_tx,
                     })
@@ -246,24 +245,29 @@ impl TunnelService for Handler {
         }
 
         let shutdown_listener = self.shutdown.clone();
-        let connections = self.connections.clone();
+        let connections = self.bridges.clone();
+        let register_cancel_listener = register_cancel.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = shutdown_listener.done() => {
                         debug!("server closed, close the control stream");
-                        break;
+                        return;
+                    }
+                    _ = register_cancel_listener.cancelled() => {
+                        debug!("register cancelled, close the control stream");
+                        return;
                     }
                     Some(connection) = conn_event_chan_rx.recv() => {
                         match connection {
                             event::ConnEvent::Add(connection) => {
                                 debug!("new user connection {}", String::from_utf8_lossy(connection.id.to_vec().as_slice()));
-                                let con2 = String::from_utf8_lossy(connection.id.to_vec().as_slice()).to_string();
+                                let connection_id = String::from_utf8_lossy(connection.id.to_vec().as_slice()).to_string();
                                 connections.insert(connection.id, connection.conn);
                                 outbound_streaming_tx
                                     .send(Ok(Control {
                                         command: Command::Work as i32,
-                                        payload: Some(Payload::Work(WorkPayload { connection_id: con2 })),
+                                        payload: Some(Payload::Work(WorkPayload { connection_id })),
                                     }))
                                     .await
                                     .context("failed to send work command")
@@ -280,7 +284,7 @@ impl TunnelService for Handler {
         });
 
         let control_stream = Box::pin(CancelableReceiver::new(
-            cancel_listener_w,
+            register_cancel,
             outbound_streaming_rx,
         )) as self::RegisterStream;
         Ok(Response::new(control_stream))
@@ -292,11 +296,12 @@ impl TunnelService for Handler {
         &self,
         req: Request<Streaming<TrafficToServer>>,
     ) -> GrpcResponse<self::DataStream> {
-        let connections = self.connections.clone();
+        let connections = self.bridges.clone();
         let mut inbound_stream = req.into_inner();
-        let (outbound_tx, outbound_rx) = mpsc::channel(1024);
+        let (outbound_tx, outbound_rx) = mpsc::channel(256);
 
         let shutdown_listener = self.shutdown.clone();
+        let close_sender_notifiers = Arc::clone(&self.close_sender_notifiers);
         tokio::spawn(async move {
             let mut started = false;
             loop {
@@ -306,9 +311,9 @@ impl TunnelService for Handler {
                         match traffic {
                             Ok(traffic) => {
                                 let connection_id_str = traffic.connection_id;
-                                let connection_id = connection_id_str.as_bytes();
+                                let connection_id = Bytes::copy_from_slice(connection_id_str.as_bytes());
                                 let connection = connections
-                                    .get(&Bytes::copy_from_slice(connection_id))
+                                    .get(&connection_id)
                                     .context("connection not found")
                                     .unwrap();
                                 let connection = connection.value();
@@ -325,8 +330,12 @@ impl TunnelService for Handler {
                                         }
                                         started = true;
 
+                                        let close_sender = CancellationToken::new();
+                                        let close_sender_listener = close_sender.clone();
+                                        close_sender_notifiers.insert(connection_id, close_sender);
+
                                         // we read data from transfer_rx, then forward the data to outbound_tx
-                                        let (transfer_tx, mut transfer_rx) = mpsc::channel(1024);
+                                        let (transfer_tx, mut transfer_rx) = mpsc::channel(256);
                                         connection
                                             .chan
                                             .send(event::ConnChanDataType::DataSender(transfer_tx))
@@ -345,8 +354,11 @@ impl TunnelService for Handler {
                                                             .context("failed to send traffic to outbound channel")
                                                             .unwrap();
                                                     }
+                                                    _ = close_sender_listener.cancelled() => {
+                                                        return;
+                                                    }
                                                     _ = outbound_tx.closed() => {
-                                                        break
+                                                        unreachable!("no chance to reach here");
                                                     }
                                                 }
                                             }
@@ -370,11 +382,14 @@ impl TunnelService for Handler {
                                             connection_id_str
                                         );
                                         connection.chan.send(event::ConnChanDataType::Data(vec![])).await.unwrap();
+                                        close_sender_notifiers.get(&connection_id).unwrap().cancel();
+                                        return; // close the data streaming
                                     }
                                     Ok(traffic_to_server::Action::Close) => {
                                         debug!("client closed streaming, connection_id: {}", connection_id_str);
-                                        // notify tcp manager to close the user connection
+                                        // notify event bus to close the user connection
                                         connection.cancel.cancel();
+                                        close_sender_notifiers.get(&connection_id).unwrap().cancel();
                                     }
                                     Err(_) => {
                                         error!("invalid traffic action: {}", traffic.action);
@@ -405,11 +420,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server() {
-        let server = Server::new(Config {
-            control_port: 8610,
-            vhttp_port: 8611,
-            domain: "".to_string(),
-        });
+        let server = Server::new(8610, 8611, "".to_string());
         let cancel_w = CancellationToken::new();
         let cancel = cancel_w.clone();
 

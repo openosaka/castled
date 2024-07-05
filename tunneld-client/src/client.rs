@@ -32,13 +32,13 @@ pub struct Client<'a> {
 struct TcpTunnel {
     name: String,
     remote_port: u16,
-    local_port: u16,
+    local_endpoint: SocketAddr,
 }
 
 struct HttpTunnel {
     name: String,
     remote_port: u16,
-    local_port: u16,
+    local_endpoint: SocketAddr,
     subdomain: Bytes,
     domain: Bytes,
 }
@@ -66,7 +66,7 @@ impl<'a> Client<'a> {
             tasks.push(self.handle_tunnel(
                 shutdown_listener.clone(),
                 tunnel,
-                tcp_tunnel.local_port,
+                tcp_tunnel.local_endpoint,
             ));
         }
 
@@ -86,7 +86,7 @@ impl<'a> Client<'a> {
             tasks.push(self.handle_tunnel(
                 shutdown_listener.clone(),
                 tunnel,
-                http_tunnel.local_port,
+                http_tunnel.local_endpoint,
             ));
         }
 
@@ -99,22 +99,22 @@ impl<'a> Client<'a> {
         Ok(())
     }
 
-    pub fn add_tcp_tunnel(&mut self, name: String, local_port: u16, remote_port: u16) {
+    pub fn add_tcp_tunnel(&mut self, name: String, local_endpoint: SocketAddr, remote_port: u16) {
         debug!(
-            "Registering TCP tunnel, remote_port: {}, local_port: {}",
-            remote_port, local_port
+            "Registering TCP tunnel, remote_port: {}, local_endpoint: {}",
+            remote_port, local_endpoint,
         );
         self.tcp_tunnels.push(TcpTunnel {
             name,
             remote_port,
-            local_port,
+            local_endpoint,
         });
     }
 
     pub fn add_http_tunnel(
         &mut self,
         name: String,
-        local_port: u16,
+        local_endpoint: SocketAddr,
         remote_port: u16,
         subdomain: Bytes,
         domain: Bytes,
@@ -122,7 +122,7 @@ impl<'a> Client<'a> {
         self.http_tunnels.push(HttpTunnel {
             name,
             remote_port,
-            local_port,
+            local_endpoint,
             subdomain,
             domain,
         });
@@ -132,7 +132,7 @@ impl<'a> Client<'a> {
         &self,
         shutdown_listener: shutdown::ShutdownListener,
         tunnel: Tunnel,
-        local_port: u16,
+        local_endpoint: SocketAddr,
     ) -> Result<()> {
         let mut rpc_client = self.new_rpc_client().await?;
         let register = rpc_client.register(RegisterReq {
@@ -151,7 +151,7 @@ impl<'a> Client<'a> {
                         shutdown_listener,
                         rpc_client,
                         register_resp,
-                        local_port,
+                        local_endpoint,
                     )
                     .await
                 }
@@ -164,7 +164,7 @@ impl<'a> Client<'a> {
         shutdown_listener: shutdown::ShutdownListener,
         rpc_client: TunnelServiceClient<Channel>,
         register_resp: tonic::Response<Streaming<Control>>,
-        local_port: u16,
+        local_endpoint: SocketAddr,
     ) -> Result<()> {
         let mut control_stream = register_resp.into_inner();
         let mut initialized = false;
@@ -212,7 +212,7 @@ impl<'a> Client<'a> {
                                 }
                                 Some(Payload::Work(work)) => {
                                     debug!("received work command, starting to forward traffic");
-                                    if let Err(e) = handle_work_traffic(rpc_client.clone() /* cheap clone operation */, &work.connection_id, local_port).await {
+                                    if let Err(e) = handle_work_traffic(rpc_client.clone() /* cheap clone operation */, &work.connection_id, local_endpoint).await {
                                         error!("failed to handle work traffic: {:?}", e);
                                     } else {
                                         continue; // the only path to success.
@@ -252,11 +252,11 @@ impl<'a> Client<'a> {
 async fn handle_work_traffic(
     mut rpc_client: TunnelServiceClient<Channel>,
     connection_id: &str,
-    local_port: u16,
+    local_endpoint: SocketAddr,
 ) -> Result<()> {
     // write response to the streaming_tx
     // rpc_client sends the data from reading the streaming_rx
-    let (streaming_tx, streaming_rx) = mpsc::channel::<TrafficToServer>(1024);
+    let (streaming_tx, streaming_rx) = mpsc::channel::<TrafficToServer>(64);
     let streaming_to_server = ReceiverStream::new(streaming_rx);
     let connection_id = connection_id.to_string();
 
@@ -272,7 +272,7 @@ async fn handle_work_traffic(
 
     // write the data streaming response to transfer_tx,
     // then forward_traffic_to_local can read the data from transfer_rx
-    let (transfer_tx, transfer_rx) = mpsc::channel::<TrafficToClient>(1024);
+    let (transfer_tx, transfer_rx) = mpsc::channel::<TrafficToClient>(64);
 
     tokio::spawn(async move {
         let mut streaming_response = rpc_client
@@ -297,9 +297,9 @@ async fn handle_work_traffic(
     let wrapper = TrafficToServerWrapper::new(connection_id.clone());
     let writer = StreamingWriter::new(streaming_tx.clone(), wrapper);
     tokio::spawn(async move {
-        let local_conn = TcpStream::connect(format!("0.0.0.0:{}", local_port)).await;
+        let local_conn = TcpStream::connect(local_endpoint).await;
         if local_conn.is_err() {
-            error!("failed to connect to local port {}, so let's notify the server to close the user connection", local_port);
+            error!("failed to connect to local endpoint {}, so let's notify the server to close the user connection", local_endpoint);
 
             streaming_tx
                 .send(TrafficToServer {
@@ -312,6 +312,7 @@ async fn handle_work_traffic(
                 .unwrap();
             return;
         }
+
         let mut local_conn = local_conn.unwrap();
         let (local_r, local_w) = local_conn.split();
 
