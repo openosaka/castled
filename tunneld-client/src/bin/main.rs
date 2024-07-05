@@ -1,11 +1,11 @@
 use bytes::Bytes;
-use std::net::{SocketAddr, ToSocketAddrs};
-use tunneld_pkg::shutdown;
-
 use clap::{Parser, Subcommand};
+use std::net::{SocketAddr, ToSocketAddrs};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+use tracing_subscriber::{prelude::*, EnvFilter};
+use tunneld_pkg::shutdown;
 
 #[derive(Parser)]
 struct Args {
@@ -52,9 +52,19 @@ const TUNNEL_NAME: &str = "tunneld-client";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
-
     let args = Args::parse();
+
+    // spawn the console server in the background
+    let console_layer = console_subscriber::ConsoleLayer::builder()
+        .with_default_env()
+        .spawn();
+
+    // build a `Subscriber` by combining layers with a
+    // `tracing_subscriber::Registry`:
+    tracing_subscriber::registry()
+        .with(console_layer.with_filter(EnvFilter::from_default_env()))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
     let cancel_w = CancellationToken::new();
     let cancel = cancel_w.clone();

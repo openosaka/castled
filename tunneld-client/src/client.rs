@@ -256,7 +256,7 @@ async fn handle_work_traffic(
 ) -> Result<()> {
     // write response to the streaming_tx
     // rpc_client sends the data from reading the streaming_rx
-    let (streaming_tx, streaming_rx) = mpsc::channel::<TrafficToServer>(1024);
+    let (streaming_tx, streaming_rx) = mpsc::channel::<TrafficToServer>(64);
     let streaming_to_server = ReceiverStream::new(streaming_rx);
     let connection_id = connection_id.to_string();
 
@@ -272,7 +272,7 @@ async fn handle_work_traffic(
 
     // write the data streaming response to transfer_tx,
     // then forward_traffic_to_local can read the data from transfer_rx
-    let (transfer_tx, transfer_rx) = mpsc::channel::<TrafficToClient>(1024);
+    let (transfer_tx, transfer_rx) = mpsc::channel::<TrafficToClient>(64);
 
     tokio::spawn(async move {
         let mut streaming_response = rpc_client
@@ -312,6 +312,7 @@ async fn handle_work_traffic(
                 .unwrap();
             return;
         }
+
         let mut local_conn = local_conn.unwrap();
         let (local_r, local_w) = local_conn.split();
 

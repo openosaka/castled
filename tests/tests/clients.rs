@@ -190,11 +190,7 @@ impl TestServer {
 async fn start_server() -> TestServer {
     let control_port = free_port().unwrap();
     let vhttp_port = free_port().unwrap();
-    let mut server = tunneld_server::Server::new(tunneld_server::Config {
-        control_port,
-        vhttp_port,
-        domain: "".to_string(),
-    });
+    let mut server = tunneld_server::Server::new(control_port, vhttp_port, "".to_string());
     let cancel_w = CancellationToken::new();
     let cancel = cancel_w.clone();
     tokio::spawn(async move {
