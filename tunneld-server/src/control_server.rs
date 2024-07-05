@@ -1,13 +1,10 @@
-use bytes::Bytes;
-use std::sync::Arc;
-use std::{net::ToSocketAddrs, pin::Pin};
-use tunneld_pkg::io::CancellableReceiver;
-use tunneld_pkg::shutdown::{self, ShutdownListener};
-
-use crate::transport::EventBus;
+use crate::data_server::DataServer;
 use anyhow::Context as _;
+use bytes::Bytes;
 use dashmap::DashMap;
 use futures::{Future, StreamExt};
+use std::sync::Arc;
+use std::{net::ToSocketAddrs, pin::Pin};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
@@ -15,6 +12,8 @@ use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
 use tracing::{debug, error, info};
 use tunneld_pkg::event;
+use tunneld_pkg::io::CancellableReceiver;
+use tunneld_pkg::shutdown::{self, ShutdownListener};
 use tunneld_protocol::pb::{
     control::Payload,
     tunnel::Config::Http,
@@ -26,37 +25,34 @@ use tunneld_protocol::pb::{traffic_to_server, TrafficToServer};
 use tunneld_protocol::validate::validate_register_req;
 use uuid::Uuid;
 
-pub struct Handler {
-    event_tx: mpsc::Sender<event::Event>,
-    // bridge the connection between handler and event_bus
-    bridges: Arc<DashMap<Bytes, event::Conn>>,
-    close_sender_notifiers: Arc<DashMap<Bytes, CancellationToken>>,
-    shutdown: ShutdownListener,
-
-    _priv: (),
-}
-
-impl Handler {
-    pub fn new(shutdown: ShutdownListener, event_tx: mpsc::Sender<event::Event>) -> Self {
-        Self {
-            bridges: Arc::new(DashMap::new()),
-            close_sender_notifiers: Arc::new(DashMap::new()),
-            event_tx,
-            shutdown,
-            _priv: (),
-        }
-    }
-}
-
 type GrpcResult<T> = Result<T, Status>;
 type GrpcResponse<T> = GrpcResult<Response<T>>;
 type RegisterStream = Pin<Box<CancellableReceiver<GrpcResult<Control>>>>;
 type DataStream = Pin<Box<dyn Stream<Item = GrpcResult<TrafficToClient>> + Send>>;
 
+/// Server is the control server of the tunnel daemon.
+///
+/// We treat the control server is grpc server as well, in the concept,
+/// they are same thing.
+/// Although the grpc server provides a [`tunneld_protocol::pb::tunnel_service_server::TunnelService::data`],
+/// it's similar to the data server(a little), but in the `data` function body,
+/// the most of work is to forward the data from client to data server.
+/// We can understand this is a tunnel between the client and the data server.
 pub struct Server {
+    /// control_port is the port of the control server.
+    ///
+    /// the client will connect to this port to register a tunnel.
     control_port: u16,
+
+    /// control_server is the grpc server instance.
     control_server: GrpcServer,
-    event_bus: EventBus,
+
+    /// event_bus is the event bus of the server.
+    event_bus: DataServer,
+
+    /// shutdown is the shutdown listener of the server.
+    /// when the shutdown signal is received, shutdown the server
+    /// by [`tunneld_pkg::shutdown::Shutdown::notify`].
     shutdown: shutdown::Shutdown,
 }
 
@@ -66,7 +62,7 @@ impl Server {
         let server = GrpcServer::builder()
             .http2_keepalive_interval(Some(tokio::time::Duration::from_secs(60)))
             .http2_keepalive_timeout(Some(tokio::time::Duration::from_secs(3)));
-        let events = EventBus::new(vhttp_port, domain);
+        let events = DataServer::new(vhttp_port, domain);
 
         Self {
             control_port,
@@ -76,6 +72,14 @@ impl Server {
         }
     }
 
+    /// Run the server, this function blocks on the shutdown future.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let server = tunneld_server::Server::new(6610, 6611, String::from("example.com"));
+    /// server.run();
+    /// ```
     pub async fn run(self, shutdown: impl Future) -> anyhow::Result<()> {
         let addr = format!("0.0.0.0:{}", self.control_port)
             .to_socket_addrs()
@@ -89,7 +93,7 @@ impl Server {
         let shutdown_listener_control_server = self.shutdown.listen();
         let shutdown_listener_event_bus = self.shutdown.listen();
 
-        let handler = Handler::new(self.shutdown.listen(), event_tx);
+        let handler = ControlHandler::new(self.shutdown.listen(), event_tx);
         let event_bus = self.event_bus;
         tokio::spawn(async move {
             event_bus
@@ -125,8 +129,32 @@ impl Server {
     }
 }
 
+/// ControlHeader is the core of the control server,
+/// it implements the grpc TunnelService.
+struct ControlHandler {
+    event_tx: mpsc::Sender<event::Event>,
+    // bridge the connection between handler and event_bus
+    bridges: Arc<DashMap<Bytes, event::Conn>>,
+    close_sender_notifiers: Arc<DashMap<Bytes, CancellationToken>>,
+    shutdown: ShutdownListener,
+
+    _priv: (),
+}
+
+impl ControlHandler {
+    fn new(shutdown: ShutdownListener, event_tx: mpsc::Sender<event::Event>) -> Self {
+        Self {
+            bridges: Arc::new(DashMap::new()),
+            close_sender_notifiers: Arc::new(DashMap::new()),
+            event_tx,
+            shutdown,
+            _priv: (),
+        }
+    }
+}
+
 #[tonic::async_trait]
-impl TunnelService for Handler {
+impl TunnelService for ControlHandler {
     type RegisterStream = RegisterStream;
 
     async fn register(&self, req: Request<RegisterReq>) -> GrpcResponse<self::RegisterStream> {

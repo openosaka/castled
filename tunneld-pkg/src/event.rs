@@ -3,6 +3,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
 
+/// event is used to communicate between the control_server and transport.
 pub struct Event {
     pub resp: oneshot::Sender<Option<Status>>,
     pub close_listener: CancellationToken,

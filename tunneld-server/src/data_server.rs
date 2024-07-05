@@ -32,7 +32,8 @@ use uuid::Uuid;
 
 static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
 
-pub struct EventBus {
+/// DataServer is responsible for handling the data transfer between user connection and Grpc Server(of Control Server).
+pub(crate) struct DataServer {
     vhttp_port: u16,
     _domain: String,
     // tunneld provides a vhttp server for responding requests to the tunnel
@@ -236,7 +237,7 @@ async fn request_to_bytes(req: Request<Incoming>) -> Result<Vec<u8>> {
     Ok(buf.into_inner())
 }
 
-impl EventBus {
+impl DataServer {
     pub fn new(vhttp_port: u16, domain: String) -> Self {
         Self {
             vhttp_port,
