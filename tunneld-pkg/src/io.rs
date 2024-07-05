@@ -223,10 +223,10 @@ macro_rules! generate_async_write_impl {
                             )));
                         }
                     }
-                    Err(e) => {
+                    Err(err) => {
                         return Poll::Ready(Err(std::io::Error::new(
                             std::io::ErrorKind::Other,
-                            format!("failed to shutdown: {:?}", e),
+                            format!("failed to shutdown: {:?}", err),
                         )));
                     }
                 }

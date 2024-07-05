@@ -51,7 +51,9 @@ const TUNNEL_NAME: &str = "tunneld-client";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    setup_logging();
+    // 6670 is the default tokio console server port of the client,
+    // use `TOKIO_CONSOLE_BIND=127.0.0.1:6669` to change it.
+    setup_logging(6670);
 
     let args = Args::parse();
 

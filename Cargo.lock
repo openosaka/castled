@@ -1987,6 +1987,7 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tracing",
+ "tracing-subscriber",
  "tunneld-pkg",
  "tunneld-protocol",
 ]
@@ -2038,6 +2039,7 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tracing",
+ "tracing-subscriber",
  "tunneld-pkg",
  "tunneld-protocol",
  "uuid",

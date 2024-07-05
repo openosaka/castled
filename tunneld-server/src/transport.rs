@@ -111,7 +111,7 @@ impl HttpTunnel {
         req: Request<Incoming>,
         conn_event_sender: Sender<event::ConnEvent>,
     ) -> Response<BoxBody<Bytes, Infallible>> {
-        let connection_id = Uuid::new_v4().to_string();
+        let connection_id = Bytes::from(Uuid::new_v4().to_string());
         let (conn_chan, mut conn_event_chan_rx) = mpsc::channel(1024);
 
         let cancel_w = CancellationToken::new();
@@ -119,7 +119,7 @@ impl HttpTunnel {
 
         conn_event_sender
             .send(event::ConnEvent::Add(event::ConnWithID {
-                id: Bytes::from(connection_id),
+                id: connection_id.clone(),
                 conn: event::Conn {
                     chan: conn_chan,
                     cancel: cancel_w,
@@ -128,10 +128,24 @@ impl HttpTunnel {
             .await
             .unwrap();
 
+        let shutdown = CancellationToken::new();
+        let shutdown_listener = shutdown.clone();
+        tokio::spawn(async move {
+            shutdown_listener.cancelled().await;
+            conn_event_sender
+                .send(event::ConnEvent::Remove(connection_id))
+                .await
+                .context("notify server to remove connection channel")
+                .unwrap();
+        });
+
         let data_sender = conn_event_chan_rx
             .recv()
             .await
-            .context("failed to receive data_sender")
+            .with_context(|| {
+                shutdown.cancel();
+                "failed to receive data_sender"
+            })
             .unwrap();
         let data_sender = {
             match data_sender {
@@ -141,9 +155,22 @@ impl HttpTunnel {
                 ),
             }
         };
-        let raw_req = request_to_bytes(req).await.unwrap();
+        let raw_req = request_to_bytes(req)
+            .await
+            .with_context(|| {
+                shutdown.cancel();
+                "failed to convert request to bytes"
+            })
+            .unwrap();
         // send the raw request to the tunnel
-        data_sender.send(raw_req).await.unwrap();
+        data_sender
+            .send(raw_req)
+            .await
+            .with_context(|| {
+                shutdown.cancel();
+                "failed to send raw request to the tunnel"
+            })
+            .unwrap();
 
         // response to user http request by sending data to outbound_rx
         let (outbound_tx, outbound_rx) = mpsc::channel::<Result<Frame<Bytes>, Infallible>>(1024);
@@ -172,6 +199,7 @@ impl HttpTunnel {
                     }
                 }
             }
+            shutdown.cancel();
         });
 
         let stream = ReceiverStream::new(outbound_rx);
@@ -455,8 +483,9 @@ impl EventBus {
                     tokio::spawn(async move {
                         let (mut remote_reader, mut remote_writer) = stream.into_split();
                         let wrapper = VecWrapper::<Vec<u8>>::new();
+                        // we expect to receive data from data_channel_rx after receive the first data_sender
+                        let mut tunnel_reader = StreamingReader::new(data_channel_rx);
                         let mut tunnel_writer = StreamingWriter::new(data_sender, wrapper);
-                        let mut tunnel_reader = StreamingReader::new(data_channel_rx); // we expect to receive data from data_channel_rx after the first time.
                         let remote_to_me_to_tunnel = async {
                             io::copy(&mut remote_reader, &mut tunnel_writer).await.unwrap();
                             tunnel_writer.shutdown().await.context("failed to shutdown tunnel writer").unwrap();

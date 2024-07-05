@@ -24,11 +24,4 @@ jobs:
     - name: cargo test --doc
       run: cargo test --locked --all-features --doc
     - name: Run e2e
-      run: |
-        bash ./tests/e2e/test_basic_tcp.sh
-        bash ./tests/e2e/test_tcp_local_server_not_start.sh
-        bash ./tests/e2e/test_close_server_gracefully.sh
-        bash ./tests/e2e/test_tcp_with_tunnel_http_server.sh
-        bash ./tests/e2e/test_http_tunnel_with_domain.sh
-        bash ./tests/e2e/test_http_tunnel_with_subdomain.sh
-        bash ./tests/e2e/test_http_tunnel_with_given_port.sh
+      run: make e2e

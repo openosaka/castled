@@ -15,5 +15,3 @@ wait_port() {
     echo "Port $port is not available after ${timeout} seconds."
     exit 1
 }
-
-RUSTFLAGS="--cfg tokio_unstable" cargo build 

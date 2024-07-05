@@ -214,6 +214,7 @@ impl TunnelService for Handler {
         let shutdown_listener = self.shutdown.clone();
         let connections = self.bridges.clone();
         let register_cancel_listener = register_cancel.clone();
+        let close_sender_notifiers = Arc::clone(&self.close_sender_notifiers);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -243,6 +244,7 @@ impl TunnelService for Handler {
                             event::ConnEvent::Remove(connection_id) => {
                                 debug!("remove user connection: {}", String::from_utf8_lossy(connection_id.to_vec().as_slice()));
                                 connections.remove(&connection_id);
+                                close_sender_notifiers.remove(&connection_id).unwrap().1.cancel();
                             }
                         }
                     }
@@ -322,10 +324,13 @@ impl TunnelService for Handler {
                                                             .unwrap();
                                                     }
                                                     _ = close_sender_listener.cancelled() => {
+                                                        // after connection is removed, this listener will be notified
                                                         return;
                                                     }
                                                     _ = outbound_tx.closed() => {
-                                                        unreachable!("no chance to reach here");
+                                                        // when the client is closed, the server will be notified,
+                                                        // because the outbound_rx will be dropped.
+                                                        return;
                                                     }
                                                 }
                                             }
@@ -349,14 +354,12 @@ impl TunnelService for Handler {
                                             connection_id_str
                                         );
                                         connection.chan.send(event::ConnChanDataType::Data(vec![])).await.unwrap();
-                                        close_sender_notifiers.get(&connection_id).unwrap().cancel();
                                         return; // close the data streaming
                                     }
                                     Ok(traffic_to_server::Action::Close) => {
                                         debug!("client closed streaming, connection_id: {}", connection_id_str);
-                                        // notify event bus to close the user connection
                                         connection.cancel.cancel();
-                                        close_sender_notifiers.get(&connection_id).unwrap().cancel();
+                                        return; // close the data streaming
                                     }
                                     Err(_) => {
                                         error!("invalid traffic action: {}", traffic.action);

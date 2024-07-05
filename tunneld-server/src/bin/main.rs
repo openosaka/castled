@@ -23,7 +23,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    setup_logging();
+    // 6669 is the default tokio console server port of the server,
+    // use `TOKIO_CONSOLE_BIND=127.0.0.1:6670` to change it.
+    setup_logging(6669);
 
     let args = Args::parse();
     info!("server args: {:?}", args);

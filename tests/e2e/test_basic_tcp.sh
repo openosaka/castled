@@ -1,5 +1,5 @@
 #!/bin/bash
-# set -x
+set -x
 
 rm -f actual.txt expected.txt || true
 
@@ -23,11 +23,11 @@ server_pid=$!
 sleep 1
 
 # Start the tunnel client
-exec ./target/debug/tunnel tcp 12345 --remote-port 9992 &
+exec ./target/debug/tunnel tcp 12348 --remote-port 9992 &
 client_pid=$!
 
 # Start the nc TCP server
-exec nc -l -p 12345 > actual.txt & # it closes with nc's timeout
+exec nc -l -p 12348 > actual.txt & # it closes with nc's timeout
 
 sleep 1
 
