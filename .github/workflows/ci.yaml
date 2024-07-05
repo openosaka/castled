@@ -17,7 +17,7 @@ jobs:
     - name: Clippy
       run: cargo clippy -- -D warnings
     - name: Build
-      run: cargo build --verbose
+      run: make build
     - name: cargo test --locked
       run: cargo test --locked --all-features --all-targets
     # https://github.com/rust-lang/cargo/issues/6669

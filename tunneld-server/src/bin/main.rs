@@ -2,7 +2,7 @@ use clap::Parser;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use tracing_subscriber::prelude::*;
+use tunneld_pkg::otel::setup_logging;
 use tunneld_server::Server;
 
 #[derive(Parser, Debug, Default)]
@@ -23,20 +23,10 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    setup_logging();
+
     let args = Args::parse();
     info!("server args: {:?}", args);
-
-    // spawn the console server in the background
-    let console_layer = console_subscriber::ConsoleLayer::builder()
-        .with_default_env()
-        .spawn();
-
-    // build a `Subscriber` by combining layers with a
-    // `tracing_subscriber::Registry`:
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(console_layer)
-        .init();
 
     let cancel_w = CancellationToken::new();
     let cancel = cancel_w.clone();

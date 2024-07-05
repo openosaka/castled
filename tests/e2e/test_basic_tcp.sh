@@ -1,7 +1,6 @@
 #!/bin/bash
 # set -x
 
-cargo build
 rm -f actual.txt expected.txt || true
 
 data="Hello, Tunneld!"

@@ -1,11 +1,11 @@
 use bytes::Bytes;
 use std::sync::Arc;
 use std::{net::ToSocketAddrs, pin::Pin};
+use tunneld_pkg::io::CancellableReceiver;
 use tunneld_pkg::shutdown::{self, ShutdownListener};
 
 use crate::transport::EventBus;
 use anyhow::Context as _;
-use core::task::{Context, Poll};
 use dashmap::DashMap;
 use futures::{Future, StreamExt};
 use tokio::sync::mpsc;
@@ -50,41 +50,8 @@ impl Handler {
 
 type GrpcResult<T> = Result<T, Status>;
 type GrpcResponse<T> = GrpcResult<Response<T>>;
-type RegisterStream = Pin<Box<CancelableReceiver<GrpcResult<Control>>>>;
+type RegisterStream = Pin<Box<CancellableReceiver<GrpcResult<Control>>>>;
 type DataStream = Pin<Box<dyn Stream<Item = GrpcResult<TrafficToClient>> + Send>>;
-
-pub struct CancelableReceiver<T> {
-    cancel: CancellationToken,
-    inner: mpsc::Receiver<T>,
-}
-
-impl<T> CancelableReceiver<T> {
-    pub fn new(cancel: CancellationToken, inner: mpsc::Receiver<T>) -> Self {
-        Self { cancel, inner }
-    }
-}
-
-impl<T> Stream for CancelableReceiver<T> {
-    type Item = T;
-
-    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        self.inner.poll_recv(cx)
-    }
-}
-
-impl<T> std::ops::Deref for CancelableReceiver<T> {
-    type Target = mpsc::Receiver<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<T> Drop for CancelableReceiver<T> {
-    fn drop(&mut self) {
-        self.cancel.cancel();
-    }
-}
 
 pub struct Server {
     control_port: u16,
@@ -283,7 +250,7 @@ impl TunnelService for Handler {
             }
         });
 
-        let control_stream = Box::pin(CancelableReceiver::new(
+        let control_stream = Box::pin(CancellableReceiver::new(
             register_cancel,
             outbound_streaming_rx,
         )) as self::RegisterStream;

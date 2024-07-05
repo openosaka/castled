@@ -20,7 +20,7 @@ use tokio::{io, select, spawn, sync::mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
-use tracing::{debug, info, info_span, Instrument as _};
+use tracing::{debug, info, info_span, Instrument};
 use tunneld_pkg::get_with_shutdown;
 use tunneld_pkg::shutdown::ShutdownListener;
 use tunneld_pkg::{
@@ -234,7 +234,7 @@ impl EventBus {
                 get_with_shutdown!(create_listener(this.vhttp_port), shutdown.clone())?;
 
             let http1_builder = Arc::clone(&http1_builder);
-            tokio::spawn(async move {
+            let vhttp_handler = async move {
                 info!("vhttp server started on port {}", this2.vhttp_port);
                 loop {
                     tokio::select! {
@@ -258,7 +258,9 @@ impl EventBus {
                         }
                     }
                 }
-            });
+            }
+            .instrument(info_span!("vhttp listener"));
+            tokio::spawn(vhttp_handler);
         }
 
         while let Some(event) = receiver.recv().await {

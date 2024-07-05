@@ -1,6 +1,6 @@
 .PHONY: build
 build:
-	RUSTFLAGS="--cfg tokio_unstable" cargo build
+	RUSTFLAGS="--cfg tokio_unstable" cargo build 
 
 .PHONY: run-server
 run-server: build

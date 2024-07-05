@@ -1,15 +1,47 @@
-use std::task::Poll;
-
+use crate::event::ConnChanDataType;
 use futures::ready;
-use tokio::{
-    io,
-    sync::mpsc::{self, Sender},
-};
+use futures::Stream;
+use std::task::{Context, Poll};
+use tokio::sync::mpsc;
+use tokio::{io, sync::mpsc::Sender};
+use tokio_util::sync::CancellationToken;
 use tokio_util::sync::PollSender;
 use tracing::debug;
 use tunneld_protocol::pb::{traffic_to_server, TrafficToClient, TrafficToServer};
 
-use crate::event::ConnChanDataType;
+/// A wrapper around mpsc::Receiver that cancels the CancellationToken when dropped.
+pub struct CancellableReceiver<T> {
+    cancel: CancellationToken,
+    inner: mpsc::Receiver<T>,
+}
+
+impl<T> CancellableReceiver<T> {
+    pub fn new(cancel: CancellationToken, inner: mpsc::Receiver<T>) -> Self {
+        Self { cancel, inner }
+    }
+}
+
+impl<T> Stream for CancellableReceiver<T> {
+    type Item = T;
+
+    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        self.inner.poll_recv(cx)
+    }
+}
+
+impl<T> std::ops::Deref for CancellableReceiver<T> {
+    type Target = mpsc::Receiver<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T> Drop for CancellableReceiver<T> {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
 
 pub struct StreamingReader<T> {
     receiver: mpsc::Receiver<T>,
