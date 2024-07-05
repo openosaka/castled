@@ -5,8 +5,6 @@ root_dir=$(git rev-parse --show-toplevel)
 cur_dir=$root_dir/tests/e2e
 source $cur_dir/util.sh
 
-cargo build
-
 # Function to clean up processes
 cleanup() {
   echo "Cleaning up..."
@@ -26,7 +24,7 @@ server_pid=$!
 wait_port 6610
 
 # Start the tunnel client
-exec $root_dir/target/debug/tunnel http 12345 --subdomain foo &
+exec $root_dir/target/debug/tunnel http 13346 --subdomain foo &
 client_pid=$!
 
 sleep 0.5
@@ -40,9 +38,9 @@ if [[ $error_code -eq 0 ]]; then
 fi
 
 # Start the nc TCP server
-exec $cur_dir/ping.py 12345 &
+exec $cur_dir/ping.py 13346 &
 http_server_pid1=$!
-wait_port 12345
+wait_port 13346
 
 response=$(curl -s -H "Host: foo.example" http://localhost:6611/ping?query=tunneld)
 if [[ $response != "pong=tunneld" ]]; then
@@ -53,15 +51,15 @@ fi
 # kill the client and register again
 kill -SIGINT $client_pid
 sleep 0.5
-exec $root_dir/target/debug/tunnel http 12345 --subdomain foo &
+exec $root_dir/target/debug/tunnel http 13346 --subdomain foo &
 client_pid=$!
 
-exec $root_dir/target/debug/tunnel http 12346 --subdomain bar &
+exec $root_dir/target/debug/tunnel http 13347 --subdomain bar &
 client_pid2=$!
-exec $cur_dir/ping.py 12346 &
+exec $cur_dir/ping.py 13347 &
 http_server_pid2=$!
 
-wait_port 12346
+wait_port 13347
 
 response=$(curl -s -H "Host: foo.example" http://localhost:6611/ping?query=server1)
 if [[ $response != "pong=server1" ]]; then

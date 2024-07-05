@@ -282,15 +282,21 @@ async fn handle_work_traffic(
             .into_inner();
 
         loop {
-            tokio::select! {
-                Some(traffic) = streaming_response.next() => {
-                    let traffic = traffic.unwrap();
+            let result = streaming_response.next().await;
+            match result {
+                Some(Ok(traffic)) => {
                     transfer_tx.send(traffic).await.unwrap();
+                    continue;
                 }
-                _ = transfer_tx.closed() => {
-                    break;
+                Some(Err(status)) => {
+                    error!("received error status: {:?}", status);
+                }
+                None => {
+                    // when the server finished traffic, it will close the data streaming
+                    debug!("data streaming closed by the server");
                 }
             }
+            return;
         }
     });
 

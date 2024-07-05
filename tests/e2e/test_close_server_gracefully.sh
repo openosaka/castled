@@ -1,7 +1,9 @@
 #!/bin/bash
 # set -x
 
-cargo build
+root_dir=$(git rev-parse --show-toplevel)
+cur_dir=$root_dir/tests/e2e
+source $cur_dir/util.sh
 
 # Function to clean up processes
 cleanup() {

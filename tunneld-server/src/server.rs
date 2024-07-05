@@ -1,11 +1,11 @@
 use bytes::Bytes;
 use std::sync::Arc;
 use std::{net::ToSocketAddrs, pin::Pin};
+use tunneld_pkg::io::CancellableReceiver;
 use tunneld_pkg::shutdown::{self, ShutdownListener};
 
 use crate::transport::EventBus;
 use anyhow::Context as _;
-use core::task::{Context, Poll};
 use dashmap::DashMap;
 use futures::{Future, StreamExt};
 use tokio::sync::mpsc;
@@ -50,41 +50,8 @@ impl Handler {
 
 type GrpcResult<T> = Result<T, Status>;
 type GrpcResponse<T> = GrpcResult<Response<T>>;
-type RegisterStream = Pin<Box<CancelableReceiver<GrpcResult<Control>>>>;
+type RegisterStream = Pin<Box<CancellableReceiver<GrpcResult<Control>>>>;
 type DataStream = Pin<Box<dyn Stream<Item = GrpcResult<TrafficToClient>> + Send>>;
-
-pub struct CancelableReceiver<T> {
-    cancel: CancellationToken,
-    inner: mpsc::Receiver<T>,
-}
-
-impl<T> CancelableReceiver<T> {
-    pub fn new(cancel: CancellationToken, inner: mpsc::Receiver<T>) -> Self {
-        Self { cancel, inner }
-    }
-}
-
-impl<T> Stream for CancelableReceiver<T> {
-    type Item = T;
-
-    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        self.inner.poll_recv(cx)
-    }
-}
-
-impl<T> std::ops::Deref for CancelableReceiver<T> {
-    type Target = mpsc::Receiver<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<T> Drop for CancelableReceiver<T> {
-    fn drop(&mut self) {
-        self.cancel.cancel();
-    }
-}
 
 pub struct Server {
     control_port: u16,
@@ -247,6 +214,7 @@ impl TunnelService for Handler {
         let shutdown_listener = self.shutdown.clone();
         let connections = self.bridges.clone();
         let register_cancel_listener = register_cancel.clone();
+        let close_sender_notifiers = Arc::clone(&self.close_sender_notifiers);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -276,6 +244,7 @@ impl TunnelService for Handler {
                             event::ConnEvent::Remove(connection_id) => {
                                 debug!("remove user connection: {}", String::from_utf8_lossy(connection_id.to_vec().as_slice()));
                                 connections.remove(&connection_id);
+                                close_sender_notifiers.remove(&connection_id).unwrap().1.cancel();
                             }
                         }
                     }
@@ -283,7 +252,7 @@ impl TunnelService for Handler {
             }
         });
 
-        let control_stream = Box::pin(CancelableReceiver::new(
+        let control_stream = Box::pin(CancellableReceiver::new(
             register_cancel,
             outbound_streaming_rx,
         )) as self::RegisterStream;
@@ -355,10 +324,13 @@ impl TunnelService for Handler {
                                                             .unwrap();
                                                     }
                                                     _ = close_sender_listener.cancelled() => {
+                                                        // after connection is removed, this listener will be notified
                                                         return;
                                                     }
                                                     _ = outbound_tx.closed() => {
-                                                        unreachable!("no chance to reach here");
+                                                        // when the client is closed, the server will be notified,
+                                                        // because the outbound_rx will be dropped.
+                                                        return;
                                                     }
                                                 }
                                             }
@@ -382,14 +354,12 @@ impl TunnelService for Handler {
                                             connection_id_str
                                         );
                                         connection.chan.send(event::ConnChanDataType::Data(vec![])).await.unwrap();
-                                        close_sender_notifiers.get(&connection_id).unwrap().cancel();
                                         return; // close the data streaming
                                     }
                                     Ok(traffic_to_server::Action::Close) => {
                                         debug!("client closed streaming, connection_id: {}", connection_id_str);
-                                        // notify event bus to close the user connection
                                         connection.cancel.cancel();
-                                        close_sender_notifiers.get(&connection_id).unwrap().cancel();
+                                        return; // close the data streaming
                                     }
                                     Err(_) => {
                                         error!("invalid traffic action: {}", traffic.action);

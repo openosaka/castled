@@ -4,8 +4,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use tracing_subscriber::prelude::*;
-use tunneld_pkg::shutdown;
+use tunneld_pkg::{otel::setup_logging, shutdown};
 
 #[derive(Parser)]
 struct Args {
@@ -52,19 +51,11 @@ const TUNNEL_NAME: &str = "tunneld-client";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 6670 is the default tokio console server port of the client,
+    // use `TOKIO_CONSOLE_BIND=127.0.0.1:6669` to change it.
+    setup_logging(6670);
+
     let args = Args::parse();
-
-    // spawn the console server in the background
-    let console_layer = console_subscriber::ConsoleLayer::builder()
-        .with_default_env()
-        .spawn();
-
-    // build a `Subscriber` by combining layers with a
-    // `tracing_subscriber::Registry`:
-    tracing_subscriber::registry()
-        .with(console_layer)
-        .with(tracing_subscriber::fmt::layer())
-        .init();
 
     let cancel_w = CancellationToken::new();
     let cancel = cancel_w.clone();
