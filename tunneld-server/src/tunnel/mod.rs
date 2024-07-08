@@ -21,7 +21,7 @@ pub(crate) struct BridgeResult {
 /// In this function, it has been sent the bridge to the control server,
 /// and wait to receive the first message which is [`tunneld_pkg::bridge::BridgeData::Sender`] from the control server.
 pub(crate) async fn init_data_sender_bridge(
-    user_inbound_chan: mpsc::Sender<event::UserInbound>,
+    user_incoming_chan: mpsc::Sender<event::UserIncoming>,
 ) -> anyhow::Result<BridgeResult> {
     let bridge_id = Bytes::from(Uuid::new_v4().to_string());
     let (bridge_chan, mut bridge_chan_receiver) = mpsc::channel(1024);
@@ -36,8 +36,8 @@ pub(crate) async fn init_data_sender_bridge(
             cancel: client_cancel,
         },
     };
-    user_inbound_chan
-        .send(event::UserInbound::Add(event))
+    user_incoming_chan
+        .send(event::UserIncoming::Add(event))
         .await
         .unwrap();
     let data_sender = bridge_chan_receiver
@@ -57,8 +57,8 @@ pub(crate) async fn init_data_sender_bridge(
     let bridge_id_clone = bridge_id.clone();
     tokio::spawn(async move {
         remove_bridge_receiver.cancelled().await;
-        user_inbound_chan
-            .send(event::UserInbound::Remove(bridge_id_clone))
+        user_incoming_chan
+            .send(event::UserIncoming::Remove(bridge_id_clone))
             .await
             .context("notify server to remove connection channel")
             .unwrap();

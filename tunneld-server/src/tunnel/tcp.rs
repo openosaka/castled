@@ -15,11 +15,14 @@ use tunneld_pkg::{
 
 pub struct Tcp {
     listener: TcpListener,
-    conn_event_sender: mpsc::Sender<event::UserInbound>,
+    conn_event_sender: mpsc::Sender<event::UserIncoming>,
 }
 
 impl Tcp {
-    pub fn new(listener: TcpListener, conn_event_sender: mpsc::Sender<event::UserInbound>) -> Self {
+    pub fn new(
+        listener: TcpListener,
+        conn_event_sender: mpsc::Sender<event::UserIncoming>,
+    ) -> Self {
         Self {
             listener,
             conn_event_sender,

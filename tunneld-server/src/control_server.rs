@@ -185,7 +185,7 @@ impl TunnelService for ControlHandler {
         let event_tx = self.event_tx.clone();
 
         let (resp_tx, resp_rx) = oneshot::channel();
-        let (user_inbound_tx, mut user_inbound_rx) = mpsc::channel::<event::UserInbound>(1024);
+        let (user_incoming_tx, mut user_incoming_rx) = mpsc::channel::<event::UserIncoming>(1024);
 
         match req.tunnel.as_ref().unwrap().config.as_ref().unwrap() {
             Tcp(tcp) => {
@@ -200,7 +200,7 @@ impl TunnelService for ControlHandler {
                             port: remote_port as u16,
                         },
                         close_listener: register_cancel.clone(),
-                        incoming_events: user_inbound_tx,
+                        incoming_events: user_incoming_tx,
                         resp: resp_tx,
                     })
                     .await
@@ -216,7 +216,7 @@ impl TunnelService for ControlHandler {
                             domain: Bytes::from(http.domain.to_owned()),
                         },
                         close_listener: register_cancel.clone(),
-                        incoming_events: user_inbound_tx,
+                        incoming_events: user_incoming_tx,
                         resp: resp_tx,
                     })
                     .await
@@ -254,9 +254,9 @@ impl TunnelService for ControlHandler {
                         debug!("register cancelled, close the control stream");
                         return;
                     }
-                    Some(connection) = user_inbound_rx.recv() => {
+                    Some(connection) = user_incoming_rx.recv() => {
                         match connection {
-                            event::UserInbound::Add(bridge) => {
+                            event::UserIncoming::Add(bridge) => {
                                 debug!("new user connection {}", String::from_utf8_lossy(bridge.id.to_vec().as_slice()));
                                 let bridge_id = String::from_utf8_lossy(bridge.id.to_vec().as_slice()).to_string();
                                 bridges.insert(bridge.id, bridge.inner);
@@ -269,7 +269,7 @@ impl TunnelService for ControlHandler {
                                     .context("failed to send work command")
                                     .unwrap();
                             }
-                            event::UserInbound::Remove(bridge_id) => {
+                            event::UserIncoming::Remove(bridge_id) => {
                                 debug!("remove user connection: {}", String::from_utf8_lossy(bridge_id.to_vec().as_slice()));
                                 bridges.remove(&bridge_id);
                                 close_sender_notifiers.remove(&bridge_id).unwrap().1.cancel();
