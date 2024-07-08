@@ -26,8 +26,8 @@ static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
 #[derive(Clone, Default)]
 pub(crate) struct Http {
     port: u16,
-    domains: DashMap<Bytes, mpsc::Sender<event::ConnEvent>>,
-    subdomains: DashMap<Bytes, mpsc::Sender<event::ConnEvent>>,
+    pub domains: Arc<DashMap<Bytes, mpsc::Sender<event::ConnEvent>>>,
+    subdomains: Arc<DashMap<Bytes, mpsc::Sender<event::ConnEvent>>>,
 }
 
 impl Http {
@@ -274,4 +274,48 @@ async fn request_to_bytes(req: Request<Incoming>) -> Result<Vec<u8>> {
         .context("failed to convert body to bytes")?;
 
     Ok(buf.into_inner())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_the_cloned_http_shares_same_registrations() {
+        let http1 = Http::new(80);
+        let http2 = http1.clone();
+
+        let (tx1, mut rx1) = mpsc::channel(1);
+        http1.register_domain(Bytes::from_static(b"example1.com"), tx1.clone());
+        http2.register_domain(Bytes::from_static(b"example2.com"), tx1.clone());
+
+        let (tx2, mut rx2) = mpsc::channel(1);
+        http1.register_subdomain(Bytes::from_static(b"foo"), tx2.clone());
+        http2.register_subdomain(Bytes::from_static(b"bar"), tx2.clone());
+
+        assert!(http1.domain_registered(Bytes::from_static(b"example2.com")));
+        assert!(http2.domain_registered(Bytes::from_static(b"example1.com")));
+        assert!(http1.subdomain_registered(Bytes::from_static(b"bar")));
+        assert!(http2.subdomain_registered(Bytes::from_static(b"foo")));
+
+        assert!(http1
+            .get_domain(Bytes::from_static(b"example2.com"))
+            .unwrap()
+            .send(event::ConnEvent::Remove(Bytes::from_static(
+                b"example2.com",
+            )))
+            .await
+            .is_ok());
+        let received = rx1.recv().await;
+        assert!(received.is_some());
+
+        assert!(http2
+            .get_subdomain(Bytes::from_static(b"foo"))
+            .unwrap()
+            .send(event::ConnEvent::Remove(Bytes::from_static(b"foo.com")))
+            .await
+            .is_ok());
+        let received = rx2.recv().await;
+        assert!(received.is_some());
+    }
 }
