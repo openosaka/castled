@@ -1,4 +1,4 @@
-use crate::tunnel::http::Http;
+use crate::tunnel::http::{DynamicRegistry, FixedRegistry, Http};
 use crate::tunnel::tcp::handle_tcp_listener;
 use bytes::Bytes;
 use std::sync::Arc;
@@ -15,13 +15,16 @@ pub(crate) struct DataServer {
     // tunneld provides a vhttp server for responding requests to the tunnel
     // which is used different subdomains or domains, they still use the same port.
     http_tunnel: Http,
+    http_registry: DynamicRegistry,
 }
 
 impl DataServer {
     pub(crate) fn new(vhttp_port: u16, domain: String) -> Self {
+        let http_registry = DynamicRegistry::new();
         Self {
             _domain: domain,
-            http_tunnel: Http::new(vhttp_port),
+            http_registry: http_registry.clone(),
+            http_tunnel: Http::new(vhttp_port, Arc::new(Box::new(http_registry))),
         }
     }
 
@@ -56,14 +59,14 @@ impl DataServer {
                     domain,
                 } => {
                     let subdomain_c = subdomain.clone();
-                    let domain_c = subdomain.clone();
+                    let domain_c = domain.clone();
                     let resp_status = this
                         .register_http(
                             port,
                             subdomain,
                             domain,
                             event.conn_event_chan,
-                            shutdown.clone(),
+                            ShutdownListener::from_cancellation(event.close_listener.clone()),
                         )
                         .await;
                     let this = Arc::clone(&this);
@@ -73,10 +76,10 @@ impl DataServer {
                         tokio::spawn(async move {
                             event.close_listener.cancelled().await;
                             if !subdomain_c.is_empty() {
-                                this.http_tunnel.unregister_subdomain(subdomain_c);
+                                this.http_registry.unregister_subdomain(subdomain_c);
                             }
                             if !domain_c.is_empty() {
-                                this.http_tunnel.unregister_domain(domain_c);
+                                this.http_registry.unregister_domain(domain_c);
                             }
                         });
                     }
@@ -103,25 +106,31 @@ impl DataServer {
 
         if !subdomain.is_empty() {
             // forward the http request from this subdomain to control server.
-            if self.http_tunnel.subdomain_registered(subdomain.clone()) {
+            if self.http_registry.subdomain_registered(subdomain.clone()) {
                 return Some(Status::already_exists("subdomain already registered"));
             }
 
-            self.http_tunnel
+            self.http_registry
                 .register_subdomain(subdomain, conn_event_chan);
             return None;
         }
         if !domain.is_empty() {
             // forward the http request from this domain to control server.
-            if self.http_tunnel.domain_registered(domain.clone()) {
+            if self.http_registry.domain_registered(domain.clone()) {
                 return Some(Status::already_exists("domain already registered"));
             }
-            self.http_tunnel
+            self.http_registry
                 .register_domain(domain, conn_event_chan.clone());
             return None;
         }
         if port != 0 {
-            if let Err(err) = Http::new(port).listen(shutdown.clone()).await {
+            if let Err(err) = Http::new(
+                port,
+                Arc::new(Box::new(FixedRegistry::new(conn_event_chan))),
+            )
+            .listen(shutdown)
+            .await
+            {
                 return Some(Status::internal(err.to_string()));
             };
             return None;

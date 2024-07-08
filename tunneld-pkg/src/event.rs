@@ -6,6 +6,7 @@ use tonic::Status;
 /// event is used to communicate between the control_server and transport.
 pub struct Event {
     pub resp: oneshot::Sender<Option<Status>>,
+    // when client exits, the server will cancel the listener.
     pub close_listener: CancellationToken,
     // when the tunneld-client exit, the server will cancel the listener.
     pub conn_event_chan: ConnEventChan,
