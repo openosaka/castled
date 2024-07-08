@@ -61,17 +61,7 @@ pub struct Tunnel {
 }
 /// Nested message and enum types in `Tunnel`.
 pub mod tunnel {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Type {
         Tcp = 0,
@@ -177,8 +167,8 @@ impl Command {
 /// Generated client implementations.
 pub mod tunnel_service_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
-    use tonic::codegen::*;
     use tonic::codegen::http::Uri;
+    use tonic::codegen::*;
     #[derive(Debug, Clone)]
     pub struct TunnelServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -222,9 +212,8 @@ pub mod tunnel_service_client {
                     <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-            >>::Error: Into<StdError> + Send + Sync,
+            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
+                Into<StdError> + Send + Sync,
         {
             TunnelServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -268,19 +257,14 @@ pub mod tunnel_service_client {
             tonic::Response<tonic::codec::Streaming<super::ControlStream>>,
             tonic::Status,
         > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/message.TunnelService/Register",
-            );
+            let path = http::uri::PathAndQuery::from_static("/message.TunnelService/Register");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("message.TunnelService", "Register"));
@@ -290,23 +274,15 @@ pub mod tunnel_service_client {
         pub async fn un_register(
             &mut self,
             request: impl tonic::IntoRequest<super::UnRegisterReq>,
-        ) -> std::result::Result<
-            tonic::Response<super::UnRegisteredResp>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+        ) -> std::result::Result<tonic::Response<super::UnRegisteredResp>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/message.TunnelService/UnRegister",
-            );
+            let path = http::uri::PathAndQuery::from_static("/message.TunnelService/UnRegister");
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("message.TunnelService", "UnRegister"));
@@ -321,19 +297,14 @@ pub mod tunnel_service_client {
             tonic::Response<tonic::codec::Streaming<super::TrafficStream>>,
             tonic::Status,
         > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::new(
+                    tonic::Code::Unknown,
+                    format!("Service was not ready: {}", e.into()),
+                )
+            })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/message.TunnelService/Data",
-            );
+            let path = http::uri::PathAndQuery::from_static("/message.TunnelService/Data");
             let mut req = request.into_streaming_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("message.TunnelService", "Data"));
@@ -351,8 +322,7 @@ pub mod tunnel_service_server {
         /// Server streaming response type for the Register method.
         type RegisterStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::ControlStream, tonic::Status>,
-            >
-            + Send
+            > + Send
             + 'static;
         /// the client sends Register to the server to create a tunnel.
         /// the server returns a stream Control to the client, the following control messages are sent through the stream.
@@ -364,15 +334,11 @@ pub mod tunnel_service_server {
         async fn un_register(
             &self,
             request: tonic::Request<super::UnRegisterReq>,
-        ) -> std::result::Result<
-            tonic::Response<super::UnRegisteredResp>,
-            tonic::Status,
-        >;
+        ) -> std::result::Result<tonic::Response<super::UnRegisteredResp>, tonic::Status>;
         /// Server streaming response type for the Data method.
         type DataStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::TrafficStream, tonic::Status>,
-            >
-            + Send
+            > + Send
             + 'static;
         /// server side: write data to the traffic stream, and read data from the traffic stream.
         /// client side: read data from the traffic stream, and write data to the traffic stream.
@@ -404,10 +370,7 @@ pub mod tunnel_service_server {
                 max_encoding_message_size: None,
             }
         }
-        pub fn with_interceptor<F>(
-            inner: T,
-            interceptor: F,
-        ) -> InterceptedService<Self, F>
+        pub fn with_interceptor<F>(inner: T, interceptor: F) -> InterceptedService<Self, F>
         where
             F: tonic::service::Interceptor,
         {
@@ -463,16 +426,13 @@ pub mod tunnel_service_server {
                 "/message.TunnelService/Register" => {
                     #[allow(non_camel_case_types)]
                     struct RegisterSvc<T: TunnelService>(pub Arc<T>);
-                    impl<
-                        T: TunnelService,
-                    > tonic::server::ServerStreamingService<super::RegisterReq>
-                    for RegisterSvc<T> {
+                    impl<T: TunnelService> tonic::server::ServerStreamingService<super::RegisterReq>
+                        for RegisterSvc<T>
+                    {
                         type Response = super::ControlStream;
                         type ResponseStream = T::RegisterStream;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::ResponseStream>,
-                            tonic::Status,
-                        >;
+                        type Future =
+                            BoxFuture<tonic::Response<Self::ResponseStream>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::RegisterReq>,
@@ -510,15 +470,9 @@ pub mod tunnel_service_server {
                 "/message.TunnelService/UnRegister" => {
                     #[allow(non_camel_case_types)]
                     struct UnRegisterSvc<T: TunnelService>(pub Arc<T>);
-                    impl<
-                        T: TunnelService,
-                    > tonic::server::UnaryService<super::UnRegisterReq>
-                    for UnRegisterSvc<T> {
+                    impl<T: TunnelService> tonic::server::UnaryService<super::UnRegisterReq> for UnRegisterSvc<T> {
                         type Response = super::UnRegisteredResp;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::UnRegisterReq>,
@@ -556,26 +510,18 @@ pub mod tunnel_service_server {
                 "/message.TunnelService/Data" => {
                     #[allow(non_camel_case_types)]
                     struct DataSvc<T: TunnelService>(pub Arc<T>);
-                    impl<
-                        T: TunnelService,
-                    > tonic::server::StreamingService<super::TrafficStream>
-                    for DataSvc<T> {
+                    impl<T: TunnelService> tonic::server::StreamingService<super::TrafficStream> for DataSvc<T> {
                         type Response = super::TrafficStream;
                         type ResponseStream = T::DataStream;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::ResponseStream>,
-                            tonic::Status,
-                        >;
+                        type Future =
+                            BoxFuture<tonic::Response<Self::ResponseStream>, tonic::Status>;
                         fn call(
                             &mut self,
-                            request: tonic::Request<
-                                tonic::Streaming<super::TrafficStream>,
-                            >,
+                            request: tonic::Request<tonic::Streaming<super::TrafficStream>>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as TunnelService>::data(&inner, request).await
-                            };
+                            let fut =
+                                async move { <T as TunnelService>::data(&inner, request).await };
                             Box::pin(fut)
                         }
                     }
@@ -602,18 +548,14 @@ pub mod tunnel_service_server {
                     };
                     Box::pin(fut)
                 }
-                _ => {
-                    Box::pin(async move {
-                        Ok(
-                            http::Response::builder()
-                                .status(200)
-                                .header("grpc-status", "12")
-                                .header("content-type", "application/grpc")
-                                .body(empty_body())
-                                .unwrap(),
-                        )
-                    })
-                }
+                _ => Box::pin(async move {
+                    Ok(http::Response::builder()
+                        .status(200)
+                        .header("grpc-status", "12")
+                        .header("content-type", "application/grpc")
+                        .body(empty_body())
+                        .unwrap())
+                }),
             }
         }
     }

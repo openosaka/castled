@@ -8,7 +8,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tunneld_pkg::{
-    event,
+    bridge, event,
     io::{StreamingReader, StreamingWriter, VecWrapper},
 };
 use uuid::Uuid;
@@ -16,7 +16,7 @@ use uuid::Uuid;
 pub(crate) async fn handle_tcp_listener(
     listener: tokio::net::TcpListener,
     shutdown: CancellationToken,
-    conn_event_chan: mpsc::Sender<event::ConnEvent>,
+    conn_event_chan: mpsc::Sender<event::UserInbound>,
 ) {
     loop {
         select! {
@@ -37,36 +37,36 @@ pub(crate) async fn handle_tcp_listener(
                 if result.is_none() {
                     return;
                 }
-                let (stream, _addr) = result.unwrap();
-                let connection_id = Uuid::new_v4().to_string();
-                let connection_id_bytes = Bytes::from(connection_id.clone());
-                let (data_channel, mut data_channel_rx) = mpsc::channel(1024);
 
-                let cancel_w = CancellationToken::new();
-                let cancel = cancel_w.clone();
+                let bridge_id = Bytes::from(Uuid::new_v4().to_string());
+                let (bridge_chan, mut bridge_chan_tx) = mpsc::channel(1024);
 
-                let event = event::ConnWithID{
-                    id: connection_id_bytes.clone(),
-                    conn: event::Conn{
-                        chan: data_channel.clone(),
-                        cancel: cancel_w,
+                let client_cancel = CancellationToken::new();
+                let client_cancel_receiver = client_cancel.clone();
+
+                let event = bridge::IdDataSenderBridge{
+                    id: bridge_id.clone(),
+                    inner: bridge::DataSenderBridge{
+                        chan: bridge_chan.clone(),
+                        cancel: client_cancel,
                     }
                 };
-                conn_event_chan.send(event::ConnEvent::Add(event)).await.unwrap();
-                let data_sender = data_channel_rx.recv().await.context("failed to receive data_sender").unwrap();
+                conn_event_chan.send(event::UserInbound::Add(event)).await.unwrap();
+                let data_sender = bridge_chan_tx.recv().await.context("failed to receive data_sender").unwrap();
                 let data_sender = {
                     match data_sender {
-                        event::ConnChanDataType::DataSender(sender) => sender,
+                        bridge::BridgeData::Sender(sender) => sender,
                         _ => panic!("we expect to receive DataSender from data_channel_rx at the first time."),
                     }
                 };
 
+                let (stream, _addr) = result.unwrap();
                 let conn_event_chan_for_removing = conn_event_chan.clone();
                 tokio::spawn(async move {
                     let (mut remote_reader, mut remote_writer) = stream.into_split();
                     let wrapper = VecWrapper::<Vec<u8>>::new();
                     // we expect to receive data from data_channel_rx after receive the first data_sender
-                    let mut tunnel_reader = StreamingReader::new(data_channel_rx);
+                    let mut tunnel_reader = StreamingReader::new(bridge_chan_tx);
                     let mut tunnel_writer = StreamingWriter::new(data_sender, wrapper);
                     let remote_to_me_to_tunnel = async {
                         io::copy(&mut remote_reader, &mut tunnel_writer).await.unwrap();
@@ -81,14 +81,13 @@ pub(crate) async fn handle_tcp_listener(
 
                     tokio::select! {
                         _ = async { tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remote) } => {
-                            debug!("closing user connection {}", connection_id);
                             conn_event_chan_for_removing
-                                .send(event::ConnEvent::Remove(connection_id_bytes))
+                                .send(event::UserInbound::Remove(bridge_id))
                                 .await
                                 .context("notify server to remove connection channel")
                                 .unwrap();
                         }
-                        _ = cancel.cancelled() => {
+                        _ = client_cancel_receiver.cancelled() => {
                             let _ = remote_writer.shutdown().await;
                             let _ = tunnel_writer.shutdown().await;
                         }

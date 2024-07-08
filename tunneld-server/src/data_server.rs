@@ -31,10 +31,12 @@ impl DataServer {
     pub(crate) async fn listen(
         self,
         shutdown: ShutdownListener,
-        mut receiver: mpsc::Receiver<event::Event>,
+        mut receiver: mpsc::Receiver<event::ClientEvent>,
     ) -> anyhow::Result<()> {
         let this = Arc::new(self);
         let http_tunnel = this.http_tunnel.clone();
+        // start the vhttp tunnel, all the http requests to the vhttp server(with the vhttp_port)
+        // has been handled by this http_tunnel.
         http_tunnel.listen(shutdown.clone()).await?;
 
         while let Some(event) = receiver.recv().await {
@@ -42,7 +44,7 @@ impl DataServer {
                 event::Payload::RegisterTcp { port } => match create_listener(port).await {
                     Ok(listener) => {
                         let cancel = event.close_listener;
-                        let conn_event_chan = event.conn_event_chan;
+                        let conn_event_chan = event.inbound_events;
                         spawn(async move {
                             handle_tcp_listener(listener, cancel, conn_event_chan.clone()).await;
                             debug!("tcp listener on {} closed", port);
@@ -65,7 +67,7 @@ impl DataServer {
                             port,
                             subdomain,
                             domain,
-                            event.conn_event_chan,
+                            event.inbound_events,
                             ShutdownListener::from_cancellation(event.close_listener.clone()),
                         )
                         .await;
@@ -97,7 +99,7 @@ impl DataServer {
         port: u16,
         subdomain: Bytes,
         domain: Bytes,
-        conn_event_chan: mpsc::Sender<event::ConnEvent>,
+        conn_event_chan: mpsc::Sender<event::UserInbound>,
         shutdown: ShutdownListener,
     ) -> Option<Status> {
         if port == 0 && subdomain.is_empty() && domain.is_empty() {

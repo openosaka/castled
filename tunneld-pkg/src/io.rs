@@ -1,4 +1,4 @@
-use crate::event::ConnChanDataType;
+use crate::bridge::BridgeData;
 use futures::ready;
 use futures::Stream;
 use std::task::{Context, Poll};
@@ -70,7 +70,7 @@ impl tokio::io::AsyncRead for StreamingReader<TrafficToClient> {
     }
 }
 
-impl tokio::io::AsyncRead for StreamingReader<ConnChanDataType> {
+impl tokio::io::AsyncRead for StreamingReader<BridgeData> {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -79,10 +79,10 @@ impl tokio::io::AsyncRead for StreamingReader<ConnChanDataType> {
         match ready!(self.receiver.poll_recv(cx)) {
             Some(data) => {
                 match data {
-                    ConnChanDataType::DataSender(_) => {
+                    BridgeData::Sender(_) => {
                         panic!("we should not receive DataSender")
                     }
-                    ConnChanDataType::Data(data) => {
+                    BridgeData::Data(data) => {
                         buf.put_slice(data.as_slice());
                     }
                 }

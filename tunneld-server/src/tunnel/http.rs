@@ -1,3 +1,4 @@
+use super::init_data_sender_bridge;
 use anyhow::{Context as _, Result};
 use bytes::{BufMut as _, Bytes};
 use dashmap::DashMap;
@@ -16,10 +17,10 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, info_span, Instrument as _};
+use tunneld_pkg::bridge::BridgeData;
 use tunneld_pkg::shutdown::ShutdownListener;
 use tunneld_pkg::util::create_listener;
 use tunneld_pkg::{event, get_with_shutdown};
-use uuid::Uuid;
 
 static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
 
@@ -99,57 +100,26 @@ impl Http {
                 .body(BoxBody::new(Full::new(Bytes::from_static(b"not found"))))
                 .unwrap();
         }
-        Self::handle_http_request(req, sender.unwrap()).await
+        let event_sender = sender.unwrap();
+        let result = init_data_sender_bridge(event_sender).await.unwrap();
+
+        Self::handle_http_request(
+            req,
+            result.data_sender,
+            result.bridge_chan_receiver,
+            result.client_cancel_receiver,
+            result.remove_bridge_sender,
+        )
+        .await
     }
 
     async fn handle_http_request(
         req: Request<Incoming>,
-        conn_event_sender: mpsc::Sender<event::ConnEvent>,
+        data_sender: mpsc::Sender<Vec<u8>>,
+        mut bridge_chan_rx: mpsc::Receiver<BridgeData>,
+        client_cancel: CancellationToken,
+        shutdown: CancellationToken,
     ) -> Response<BoxBody<Bytes, Infallible>> {
-        let connection_id = Bytes::from(Uuid::new_v4().to_string());
-        let (conn_chan, mut conn_event_chan_rx) = mpsc::channel(1024);
-
-        let cancel_w = CancellationToken::new();
-        let cancel = cancel_w.clone();
-
-        conn_event_sender
-            .send(event::ConnEvent::Add(event::ConnWithID {
-                id: connection_id.clone(),
-                conn: event::Conn {
-                    chan: conn_chan,
-                    cancel: cancel_w,
-                },
-            }))
-            .await
-            .unwrap();
-
-        let shutdown = CancellationToken::new();
-        let shutdown_listener = shutdown.clone();
-        tokio::spawn(async move {
-            shutdown_listener.cancelled().await;
-            conn_event_sender
-                .send(event::ConnEvent::Remove(connection_id))
-                .await
-                .context("notify server to remove connection channel")
-                .unwrap();
-        });
-
-        let data_sender = conn_event_chan_rx
-            .recv()
-            .await
-            .with_context(|| {
-                shutdown.cancel();
-                "failed to receive data_sender"
-            })
-            .unwrap();
-        let data_sender = {
-            match data_sender {
-                event::ConnChanDataType::DataSender(sender) => sender,
-                _ => panic!(
-                    "we expect to receive DataSender from data_channel_rx at the first time."
-                ),
-            }
-        };
         let raw_req = request_to_bytes(req)
             .await
             .with_context(|| {
@@ -174,12 +144,12 @@ impl Http {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = cancel.cancelled() => {
+                    _ = client_cancel.cancelled() => {
                         break;
                     }
-                    Some(data) = conn_event_chan_rx.recv() => {
+                    Some(data) = bridge_chan_rx.recv() => {
                         match data {
-                            event::ConnChanDataType::Data(data) => {
+                            BridgeData::Data(data) => {
                                 if data.is_empty() {
                                     // means no more data
                                     break;
@@ -231,6 +201,104 @@ async fn request_to_bytes(req: Request<Incoming>) -> Result<Vec<u8>> {
     Ok(buf.into_inner())
 }
 
+/// LookupRequest is a trait that provides a method to
+/// lookup the request and return the sender to send the data.
+pub(crate) trait LookupRequest: Send + Sync {
+    fn lookup(&self, req: &Request<Incoming>) -> Option<mpsc::Sender<event::UserInbound>>;
+}
+
+/// FixedRegistry is a registry that always returns the fixed sender.
+#[derive(Clone)]
+pub(crate) struct FixedRegistry {
+    sender: mpsc::Sender<event::UserInbound>,
+}
+
+impl FixedRegistry {
+    pub(crate) fn new(sender: mpsc::Sender<event::UserInbound>) -> Self {
+        Self { sender }
+    }
+}
+
+impl LookupRequest for FixedRegistry {
+    fn lookup(&self, _: &Request<Incoming>) -> Option<mpsc::Sender<event::UserInbound>> {
+        Some(self.sender.clone())
+    }
+}
+
+/// DynamicRegistry is a registry that can register and unregister the domain and subdomain.
+#[derive(Clone, Default)]
+pub(crate) struct DynamicRegistry {
+    domains: Arc<DashMap<Bytes, mpsc::Sender<event::UserInbound>>>,
+    subdomains: Arc<DashMap<Bytes, mpsc::Sender<event::UserInbound>>>,
+}
+
+impl LookupRequest for DynamicRegistry {
+    fn lookup(&self, req: &Request<Incoming>) -> Option<mpsc::Sender<event::UserInbound>> {
+        let host = req.headers().get("host").unwrap_or(&EMPTY_HOST);
+        let host = host.to_str().unwrap_or_default();
+        debug!("host: {}", host);
+        // match the host
+        let result = self.get_domain(Bytes::copy_from_slice(host.as_bytes()));
+        if result.is_some() {
+            return result;
+        }
+
+        // match subdomain
+        let subdomain = host.split('.').next().unwrap_or_default();
+        let subdomain = Bytes::copy_from_slice(subdomain.as_bytes());
+        self.get_subdomain(subdomain)
+    }
+}
+
+impl DynamicRegistry {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn register_domain(
+        &self,
+        domain: Bytes,
+        conn_event_chan: mpsc::Sender<event::UserInbound>,
+    ) {
+        self.domains.insert(domain, conn_event_chan);
+    }
+
+    pub(crate) fn unregister_domain(&self, domain: Bytes) {
+        self.domains.remove(&domain);
+    }
+
+    pub(crate) fn domain_registered(&self, domain: Bytes) -> bool {
+        self.domains.contains_key(&domain)
+    }
+
+    pub(crate) fn get_domain(&self, domain: Bytes) -> Option<mpsc::Sender<event::UserInbound>> {
+        self.domains.get(&domain).map(|x| x.value().clone())
+    }
+
+    pub(crate) fn subdomain_registered(&self, subdomain: Bytes) -> bool {
+        self.subdomains.contains_key(&subdomain)
+    }
+
+    pub(crate) fn unregister_subdomain(&self, subdomain: Bytes) {
+        self.subdomains.remove(&subdomain);
+    }
+
+    pub(crate) fn get_subdomain(
+        &self,
+        subdomain: Bytes,
+    ) -> Option<mpsc::Sender<event::UserInbound>> {
+        self.subdomains.get(&subdomain).map(|x| x.value().clone())
+    }
+
+    pub(crate) fn register_subdomain(
+        &self,
+        subdomain: Bytes,
+        conn_event_chan: mpsc::Sender<event::UserInbound>,
+    ) {
+        self.subdomains.insert(subdomain, conn_event_chan);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -256,7 +324,7 @@ mod test {
         assert!(http1
             .get_domain(Bytes::from_static(b"example2.com"))
             .unwrap()
-            .send(event::ConnEvent::Remove(Bytes::from_static(
+            .send(event::UserInbound::Remove(Bytes::from_static(
                 b"example2.com",
             )))
             .await
@@ -267,7 +335,7 @@ mod test {
         assert!(http2
             .get_subdomain(Bytes::from_static(b"foo"))
             .unwrap()
-            .send(event::ConnEvent::Remove(Bytes::from_static(b"foo.com")))
+            .send(event::UserInbound::Remove(Bytes::from_static(b"foo.com")))
             .await
             .is_ok());
         let received = rx2.recv().await;
@@ -280,100 +348,5 @@ mod test {
         http1.unregister_domain(Bytes::from_static(b"example2.com"));
         assert!(!http2.domain_registered(Bytes::from_static(b"example2.com")));
         assert!(http2.domain_registered(Bytes::from_static(b"example1.com")));
-    }
-}
-
-/// LookupRequest is a trait that provides a method to
-/// lookup the request and return the sender to send the data.
-pub(crate) trait LookupRequest: Send + Sync {
-    fn lookup(&self, req: &Request<Incoming>) -> Option<mpsc::Sender<event::ConnEvent>>;
-}
-
-/// FixedRegistry is a registry that always returns the fixed sender.
-#[derive(Clone)]
-pub(crate) struct FixedRegistry {
-    sender: mpsc::Sender<event::ConnEvent>,
-}
-
-impl FixedRegistry {
-    pub(crate) fn new(sender: mpsc::Sender<event::ConnEvent>) -> Self {
-        Self { sender }
-    }
-}
-
-impl LookupRequest for FixedRegistry {
-    fn lookup(&self, _: &Request<Incoming>) -> Option<mpsc::Sender<event::ConnEvent>> {
-        Some(self.sender.clone())
-    }
-}
-
-/// DynamicRegistry is a registry that can register and unregister the domain and subdomain.
-#[derive(Clone, Default)]
-pub(crate) struct DynamicRegistry {
-    domains: Arc<DashMap<Bytes, mpsc::Sender<event::ConnEvent>>>,
-    subdomains: Arc<DashMap<Bytes, mpsc::Sender<event::ConnEvent>>>,
-}
-
-impl LookupRequest for DynamicRegistry {
-    fn lookup(&self, req: &Request<Incoming>) -> Option<mpsc::Sender<event::ConnEvent>> {
-        let host = req.headers().get("host").unwrap_or(&EMPTY_HOST);
-        let host = host.to_str().unwrap_or_default();
-        debug!("host: {}", host);
-        // match the host
-        let result = self.get_domain(Bytes::copy_from_slice(host.as_bytes()));
-        if result.is_some() {
-            return result;
-        }
-
-        // match subdomain
-        let subdomain = host.split('.').next().unwrap_or_default();
-        let subdomain = Bytes::copy_from_slice(subdomain.as_bytes());
-        self.get_subdomain(subdomain)
-    }
-}
-
-impl DynamicRegistry {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
-    pub(crate) fn register_domain(
-        &self,
-        domain: Bytes,
-        conn_event_chan: mpsc::Sender<event::ConnEvent>,
-    ) {
-        self.domains.insert(domain, conn_event_chan);
-    }
-
-    pub(crate) fn unregister_domain(&self, domain: Bytes) {
-        self.domains.remove(&domain);
-    }
-
-    pub(crate) fn domain_registered(&self, domain: Bytes) -> bool {
-        self.domains.contains_key(&domain)
-    }
-
-    pub(crate) fn get_domain(&self, domain: Bytes) -> Option<mpsc::Sender<event::ConnEvent>> {
-        self.domains.get(&domain).map(|x| x.value().clone())
-    }
-
-    pub(crate) fn subdomain_registered(&self, subdomain: Bytes) -> bool {
-        self.subdomains.contains_key(&subdomain)
-    }
-
-    pub(crate) fn unregister_subdomain(&self, subdomain: Bytes) {
-        self.subdomains.remove(&subdomain);
-    }
-
-    pub(crate) fn get_subdomain(&self, subdomain: Bytes) -> Option<mpsc::Sender<event::ConnEvent>> {
-        self.subdomains.get(&subdomain).map(|x| x.value().clone())
-    }
-
-    pub(crate) fn register_subdomain(
-        &self,
-        subdomain: Bytes,
-        conn_event_chan: mpsc::Sender<event::ConnEvent>,
-    ) {
-        self.subdomains.insert(subdomain, conn_event_chan);
     }
 }

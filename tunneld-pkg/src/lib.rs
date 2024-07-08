@@ -1,3 +1,4 @@
+pub mod bridge;
 pub mod event;
 pub mod io;
 pub mod otel;
