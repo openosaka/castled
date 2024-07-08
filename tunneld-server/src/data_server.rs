@@ -1,5 +1,5 @@
 use crate::tunnel::http::{DynamicRegistry, FixedRegistry, Http};
-use crate::tunnel::tcp::handle_tcp_listener;
+use crate::tunnel::tcp::Tcp;
 use bytes::Bytes;
 use std::sync::Arc;
 use tokio::{spawn, sync::mpsc};
@@ -36,17 +36,19 @@ impl DataServer {
         let this = Arc::new(self);
         let http_tunnel = this.http_tunnel.clone();
         // start the vhttp tunnel, all the http requests to the vhttp server(with the vhttp_port)
-        // has been handled by this http_tunnel.
-        http_tunnel.listen(shutdown.clone()).await?;
+        // will be handled by this http_tunnel.
+        http_tunnel.serve(shutdown.clone()).await?;
 
         while let Some(event) = receiver.recv().await {
             match event.payload {
                 event::Payload::RegisterTcp { port } => match create_listener(port).await {
                     Ok(listener) => {
                         let cancel = event.close_listener;
-                        let conn_event_chan = event.inbound_events;
+                        let conn_event_chan = event.incoming_events;
                         spawn(async move {
-                            handle_tcp_listener(listener, cancel, conn_event_chan.clone()).await;
+                            Tcp::new(listener, conn_event_chan.clone())
+                                .serve(cancel)
+                                .await;
                             debug!("tcp listener on {} closed", port);
                         });
                         event.resp.send(None).unwrap(); // success
@@ -67,7 +69,7 @@ impl DataServer {
                             port,
                             subdomain,
                             domain,
-                            event.inbound_events,
+                            event.incoming_events,
                             ShutdownListener::from_cancellation(event.close_listener.clone()),
                         )
                         .await;
@@ -130,7 +132,7 @@ impl DataServer {
                 port,
                 Arc::new(Box::new(FixedRegistry::new(conn_event_chan))),
             )
-            .listen(shutdown)
+            .serve(shutdown)
             .await
             {
                 return Some(Status::internal(err.to_string()));

@@ -15,7 +15,7 @@ pub struct ClientEvent {
     // when client exits, the server will cancel the listener.
     pub close_listener: CancellationToken,
     // data server sends events to this channel continuously.
-    pub inbound_events: InboundEventSender,
+    pub incoming_events: InboundEventSender,
 }
 
 /// Payload is the data of the ClientEvent.

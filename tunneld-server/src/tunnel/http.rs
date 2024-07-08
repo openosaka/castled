@@ -1,4 +1,4 @@
-use super::init_data_sender_bridge;
+use super::{init_data_sender_bridge, BridgeResult};
 use anyhow::{Context as _, Result};
 use bytes::{BufMut as _, Bytes};
 use dashmap::DashMap;
@@ -15,7 +15,6 @@ use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, info_span, Instrument as _};
 use tunneld_pkg::bridge::BridgeData;
 use tunneld_pkg::shutdown::ShutdownListener;
@@ -43,7 +42,7 @@ impl Http {
         Self { port, lookup }
     }
 
-    pub(crate) async fn listen(self, shutdown: ShutdownListener) -> anyhow::Result<()> {
+    pub(crate) async fn serve(self, shutdown: ShutdownListener) -> anyhow::Result<()> {
         let this = Arc::new(self);
 
         let http1_builder = Arc::new(http1::Builder::new());
@@ -101,38 +100,29 @@ impl Http {
                 .unwrap();
         }
         let event_sender = sender.unwrap();
-        let result = init_data_sender_bridge(event_sender).await.unwrap();
+        let bridge = init_data_sender_bridge(event_sender).await.unwrap();
 
-        Self::handle_http_request(
-            req,
-            result.data_sender,
-            result.bridge_chan_receiver,
-            result.client_cancel_receiver,
-            result.remove_bridge_sender,
-        )
-        .await
+        Self::handle_http_request(req, bridge).await
     }
 
     async fn handle_http_request(
         req: Request<Incoming>,
-        data_sender: mpsc::Sender<Vec<u8>>,
-        mut bridge_chan_rx: mpsc::Receiver<BridgeData>,
-        client_cancel: CancellationToken,
-        shutdown: CancellationToken,
+        bridge: BridgeResult,
     ) -> Response<BoxBody<Bytes, Infallible>> {
         let raw_req = request_to_bytes(req)
             .await
             .with_context(|| {
-                shutdown.cancel();
+                bridge.remove_bridge_sender.cancel();
                 "failed to convert request to bytes"
             })
             .unwrap();
         // send the raw request to the tunnel
-        data_sender
+        bridge
+            .data_sender
             .send(raw_req)
             .await
             .with_context(|| {
-                shutdown.cancel();
+                bridge.remove_bridge_sender.cancel();
                 "failed to send raw request to the tunnel"
             })
             .unwrap();
@@ -140,14 +130,16 @@ impl Http {
         // response to user http request by sending data to outbound_rx
         let (outbound_tx, outbound_rx) = mpsc::channel::<Result<Frame<Bytes>, Infallible>>(1024);
 
+        let mut data_receiver = bridge.data_receiver;
+
         // read the response from the tunnel and send it back to the user
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = client_cancel.cancelled() => {
+                    _ = bridge.client_cancel_receiver.cancelled() => {
                         break;
                     }
-                    Some(data) = bridge_chan_rx.recv() => {
+                    Some(data) = data_receiver.recv() => {
                         match data {
                             BridgeData::Data(data) => {
                                 if data.is_empty() {
@@ -164,7 +156,7 @@ impl Http {
                     }
                 }
             }
-            shutdown.cancel();
+            bridge.remove_bridge_sender.cancel();
         });
 
         let stream = ReceiverStream::new(outbound_rx);

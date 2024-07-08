@@ -10,11 +10,16 @@ pub(crate) mod tcp;
 
 pub(crate) struct BridgeResult {
     pub data_sender: mpsc::Sender<Vec<u8>>,
-    pub bridge_chan_receiver: mpsc::Receiver<bridge::BridgeData>,
+    pub data_receiver: mpsc::Receiver<bridge::BridgeData>,
     pub client_cancel_receiver: CancellationToken,
+    /// the caller should cancel this token when it finishes the transfer.
     pub remove_bridge_sender: CancellationToken,
 }
 
+/// init_data_sender_bridge creates a bridge between the control server and data server.
+///
+/// In this function, it has been sent the bridge to the control server,
+/// and wait to receive the first message which is [`tunneld_pkg::bridge::BridgeData::Sender`] from the control server.
 pub(crate) async fn init_data_sender_bridge(
     user_inbound_chan: mpsc::Sender<event::UserInbound>,
 ) -> anyhow::Result<BridgeResult> {
@@ -61,7 +66,7 @@ pub(crate) async fn init_data_sender_bridge(
 
     Ok(BridgeResult {
         data_sender,
-        bridge_chan_receiver,
+        data_receiver: bridge_chan_receiver,
         client_cancel_receiver,
         remove_bridge_sender,
     })

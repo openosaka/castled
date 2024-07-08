@@ -200,7 +200,7 @@ impl TunnelService for ControlHandler {
                             port: remote_port as u16,
                         },
                         close_listener: register_cancel.clone(),
-                        inbound_events: user_inbound_tx,
+                        incoming_events: user_inbound_tx,
                         resp: resp_tx,
                     })
                     .await
@@ -216,7 +216,7 @@ impl TunnelService for ControlHandler {
                             domain: Bytes::from(http.domain.to_owned()),
                         },
                         close_listener: register_cancel.clone(),
-                        inbound_events: user_inbound_tx,
+                        incoming_events: user_inbound_tx,
                         resp: resp_tx,
                     })
                     .await
