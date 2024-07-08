@@ -196,23 +196,23 @@ async fn request_to_bytes(req: Request<Incoming>) -> Result<Vec<u8>> {
 /// LookupRequest is a trait that provides a method to
 /// lookup the request and return the sender to send the data.
 pub(crate) trait LookupRequest: Send + Sync {
-    fn lookup(&self, req: &Request<Incoming>) -> Option<mpsc::Sender<event::UserInbound>>;
+    fn lookup(&self, req: &Request<Incoming>) -> Option<mpsc::Sender<event::UserIncoming>>;
 }
 
 /// FixedRegistry is a registry that always returns the fixed sender.
 #[derive(Clone)]
 pub(crate) struct FixedRegistry {
-    sender: mpsc::Sender<event::UserInbound>,
+    sender: mpsc::Sender<event::UserIncoming>,
 }
 
 impl FixedRegistry {
-    pub(crate) fn new(sender: mpsc::Sender<event::UserInbound>) -> Self {
+    pub(crate) fn new(sender: mpsc::Sender<event::UserIncoming>) -> Self {
         Self { sender }
     }
 }
 
 impl LookupRequest for FixedRegistry {
-    fn lookup(&self, _: &Request<Incoming>) -> Option<mpsc::Sender<event::UserInbound>> {
+    fn lookup(&self, _: &Request<Incoming>) -> Option<mpsc::Sender<event::UserIncoming>> {
         Some(self.sender.clone())
     }
 }
@@ -220,12 +220,12 @@ impl LookupRequest for FixedRegistry {
 /// DynamicRegistry is a registry that can register and unregister the domain and subdomain.
 #[derive(Clone, Default)]
 pub(crate) struct DynamicRegistry {
-    domains: Arc<DashMap<Bytes, mpsc::Sender<event::UserInbound>>>,
-    subdomains: Arc<DashMap<Bytes, mpsc::Sender<event::UserInbound>>>,
+    domains: Arc<DashMap<Bytes, mpsc::Sender<event::UserIncoming>>>,
+    subdomains: Arc<DashMap<Bytes, mpsc::Sender<event::UserIncoming>>>,
 }
 
 impl LookupRequest for DynamicRegistry {
-    fn lookup(&self, req: &Request<Incoming>) -> Option<mpsc::Sender<event::UserInbound>> {
+    fn lookup(&self, req: &Request<Incoming>) -> Option<mpsc::Sender<event::UserIncoming>> {
         let host = req.headers().get("host").unwrap_or(&EMPTY_HOST);
         let host = host.to_str().unwrap_or_default();
         debug!("host: {}", host);
@@ -250,7 +250,7 @@ impl DynamicRegistry {
     pub(crate) fn register_domain(
         &self,
         domain: Bytes,
-        conn_event_chan: mpsc::Sender<event::UserInbound>,
+        conn_event_chan: mpsc::Sender<event::UserIncoming>,
     ) {
         self.domains.insert(domain, conn_event_chan);
     }
@@ -263,7 +263,7 @@ impl DynamicRegistry {
         self.domains.contains_key(&domain)
     }
 
-    pub(crate) fn get_domain(&self, domain: Bytes) -> Option<mpsc::Sender<event::UserInbound>> {
+    pub(crate) fn get_domain(&self, domain: Bytes) -> Option<mpsc::Sender<event::UserIncoming>> {
         self.domains.get(&domain).map(|x| x.value().clone())
     }
 
@@ -278,14 +278,14 @@ impl DynamicRegistry {
     pub(crate) fn get_subdomain(
         &self,
         subdomain: Bytes,
-    ) -> Option<mpsc::Sender<event::UserInbound>> {
+    ) -> Option<mpsc::Sender<event::UserIncoming>> {
         self.subdomains.get(&subdomain).map(|x| x.value().clone())
     }
 
     pub(crate) fn register_subdomain(
         &self,
         subdomain: Bytes,
-        conn_event_chan: mpsc::Sender<event::UserInbound>,
+        conn_event_chan: mpsc::Sender<event::UserIncoming>,
     ) {
         self.subdomains.insert(subdomain, conn_event_chan);
     }
@@ -316,7 +316,7 @@ mod test {
         assert!(http1
             .get_domain(Bytes::from_static(b"example2.com"))
             .unwrap()
-            .send(event::UserInbound::Remove(Bytes::from_static(
+            .send(event::UserIncoming::Remove(Bytes::from_static(
                 b"example2.com",
             )))
             .await
@@ -327,7 +327,7 @@ mod test {
         assert!(http2
             .get_subdomain(Bytes::from_static(b"foo"))
             .unwrap()
-            .send(event::UserInbound::Remove(Bytes::from_static(b"foo.com")))
+            .send(event::UserIncoming::Remove(Bytes::from_static(b"foo.com")))
             .await
             .is_ok());
         let received = rx2.recv().await;

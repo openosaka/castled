@@ -15,7 +15,7 @@ pub struct ClientEvent {
     // when client exits, the server will cancel the listener.
     pub close_listener: CancellationToken,
     // data server sends events to this channel continuously.
-    pub incoming_events: InboundEventSender,
+    pub incoming_events: IncomingEventSender,
 }
 
 /// Payload is the data of the ClientEvent.
@@ -32,12 +32,12 @@ pub enum Payload {
     },
 }
 
-/// InboundEventChan is used to notify the server to add | remove to the connection list.
-pub type InboundEventSender = mpsc::Sender<UserInbound>;
+/// IncomingEventSender is used to notify the server to add | remove to the connection list.
+pub type IncomingEventSender = mpsc::Sender<UserIncoming>;
 
 /// When the data server receives a user request (generally from the browser or terminal),
 /// when it will send `Add` to send a bridge with the control server.
-pub enum UserInbound {
+pub enum UserIncoming {
     Add(crate::bridge::IdDataSenderBridge),
     Remove(Bytes),
 }

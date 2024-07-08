@@ -101,7 +101,7 @@ impl DataServer {
         port: u16,
         subdomain: Bytes,
         domain: Bytes,
-        conn_event_chan: mpsc::Sender<event::UserInbound>,
+        conn_event_chan: mpsc::Sender<event::UserIncoming>,
         shutdown: ShutdownListener,
     ) -> Option<Status> {
         if port == 0 && subdomain.is_empty() && domain.is_empty() {
