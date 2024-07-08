@@ -2,10 +2,11 @@ use super::{init_data_sender_bridge, BridgeResult};
 use anyhow::{Context as _, Result};
 use bytes::{BufMut as _, Bytes};
 use dashmap::DashMap;
+use futures::TryStreamExt;
 use http::HeaderValue;
 use http_body::Frame;
 use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt as _, Full, Limited, StreamBody};
+use http_body_util::{BodyDataStream, BodyExt, Full, StreamBody};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Request, Response};
@@ -17,6 +18,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info, info_span, Instrument as _};
 use tunneld_pkg::bridge::BridgeData;
+use tunneld_pkg::event::IncomingEventSender;
 use tunneld_pkg::shutdown::ShutdownListener;
 use tunneld_pkg::util::create_listener;
 use tunneld_pkg::{event, get_with_shutdown};
@@ -26,6 +28,15 @@ static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
 pub(crate) struct Http {
     port: u16,
     lookup: Arc<Box<dyn LookupRequest>>,
+}
+
+/// LookupRequest is a trait that provides a method to
+/// lookups the request and returns [`IncomingEventSender`].
+///
+/// http tunnel will use [`IncomingEventSender`] to create a bridge
+/// between the control server and data server when receives a request.
+pub(crate) trait LookupRequest: Send + Sync {
+    fn lookup(&self, req: &Request<Incoming>) -> Option<IncomingEventSender>;
 }
 
 impl Clone for Http {
@@ -88,10 +99,7 @@ impl Http {
         Ok(())
     }
 
-    pub(crate) async fn call(
-        &self,
-        req: Request<Incoming>,
-    ) -> Response<BoxBody<Bytes, Infallible>> {
+    async fn call(&self, req: Request<Incoming>) -> Response<BoxBody<Bytes, Infallible>> {
         let sender = self.lookup.lookup(&req);
         if sender.is_none() {
             return Response::builder()
@@ -109,23 +117,45 @@ impl Http {
         req: Request<Incoming>,
         bridge: BridgeResult,
     ) -> Response<BoxBody<Bytes, Infallible>> {
-        let raw_req = request_to_bytes(req)
+        let (headers, mut body_stream) = request_to_stream(req)
             .await
             .with_context(|| {
                 bridge.remove_bridge_sender.cancel();
                 "failed to convert request to bytes"
             })
             .unwrap();
-        // send the raw request to the tunnel
-        bridge
-            .data_sender
-            .send(raw_req)
-            .await
-            .with_context(|| {
-                bridge.remove_bridge_sender.cancel();
-                "failed to send raw request to the tunnel"
-            })
-            .unwrap();
+
+        let data_sender = bridge.data_sender.clone();
+        let remove_bridge_sender = bridge.remove_bridge_sender.clone();
+        let client_cancel_receiver = bridge.client_cancel_receiver.clone();
+        tokio::spawn(async move {
+            data_sender
+                .send(headers)
+                .await
+                .with_context(|| {
+                    remove_bridge_sender.cancel();
+                    "failed to send raw request to the tunnel"
+                })
+                .unwrap();
+
+            loop {
+                tokio::select! {
+                    _ = client_cancel_receiver.cancelled() => {
+                        break;
+                    }
+                    data = body_stream.try_next() => {
+                        match data {
+                            Ok(Some(data)) => {
+                                let _ = data_sender.send(data.to_vec()).await;
+                            }
+                            _ => {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
 
         // response to user http request by sending data to outbound_rx
         let (outbound_tx, outbound_rx) = mpsc::channel::<Result<Frame<Bytes>, Infallible>>(1024);
@@ -166,7 +196,9 @@ impl Http {
 }
 
 // TODO(sword): use stream
-async fn request_to_bytes(req: Request<Incoming>) -> Result<Vec<u8>> {
+async fn request_to_stream(
+    req: Request<Incoming>,
+) -> Result<(Vec<u8>, StreamBody<BodyDataStream<Incoming>>)> {
     let (parts, body) = req.into_parts();
     let mut buf = vec![].writer();
 
@@ -181,22 +213,8 @@ async fn request_to_bytes(req: Request<Incoming>) -> Result<Vec<u8>> {
     }
     let _ = buf.write(b"\r\n")?;
 
-    // TODO(sword): convert to stream
-    let body = Limited::new(body, 1024 * 1024)
-        .collect()
-        .await
-        .map_err(|_| anyhow::anyhow!("failed to collect body"))?
-        .to_bytes();
-    buf.write(body.to_vec().as_slice())
-        .context("failed to convert body to bytes")?;
-
-    Ok(buf.into_inner())
-}
-
-/// LookupRequest is a trait that provides a method to
-/// lookup the request and return the sender to send the data.
-pub(crate) trait LookupRequest: Send + Sync {
-    fn lookup(&self, req: &Request<Incoming>) -> Option<mpsc::Sender<event::UserIncoming>>;
+    let body = StreamBody::new(body.into_data_stream());
+    Ok((buf.into_inner(), body))
 }
 
 /// FixedRegistry is a registry that always returns the fixed sender.
