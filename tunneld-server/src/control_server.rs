@@ -77,8 +77,11 @@ impl Server {
     /// # Examples
     ///
     /// ```no_run
-    /// let server = tunneld_server::Server::new(6610, 6611, String::from("example.com"));
-    /// server.run();
+    /// async fn run_server() {
+    ///     let server = tunneld_server::Server::new(6610, 6611, String::from("example.com"));
+    ///     let shutdown = tokio::signal::ctrl_c();
+    ///     server.run(shutdown).await.unwrap();
+    /// }
     /// ```
     pub async fn run(self, shutdown: impl Future) -> anyhow::Result<()> {
         let addr = format!("0.0.0.0:{}", self.control_port)
@@ -289,6 +292,10 @@ impl TunnelService for ControlHandler {
 
     type DataStream = DataStream;
 
+    /// data implements the grpc [`tunneld_protocol::pb::tunnel_service_server::TunnelService::data`].
+    ///
+    /// The data function is the core of the control server,
+    /// it forwards the data between the client and the data server.
     async fn data(
         &self,
         req: Request<Streaming<TrafficToServer>>,
