@@ -3,14 +3,22 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
 
-pub struct Event {
-    pub resp: oneshot::Sender<Option<Status>>,
-    pub close_listener: CancellationToken,
-    // when the tunneld-client exit, the server will cancel the listener.
-    pub conn_event_chan: ConnEventChan,
+/// ClientEvent is used to communicate between the control server and data server.
+/// When the control server receives a tunneld client request, eventually it will
+/// send a ClientEvent to the data server if no error occurs.
+pub struct ClientEvent {
+    // the payload of the event.
     pub payload: Payload,
+    // the data server will send back the status of the control server
+    // after it handles this event.
+    pub resp: oneshot::Sender<Option<Status>>,
+    // when client exits, the server will cancel the listener.
+    pub close_listener: CancellationToken,
+    // data server sends events to this channel continuously.
+    pub incoming_events: InboundEventSender,
 }
 
+/// Payload is the data of the ClientEvent.
 pub enum Payload {
     RegisterTcp {
         port: u16,
@@ -24,34 +32,12 @@ pub enum Payload {
     },
 }
 
-// ConnectionChannel is used to notify the server to add | remove to the connection list.
-pub type ConnEventChan = mpsc::Sender<ConnEvent>;
+/// InboundEventChan is used to notify the server to add | remove to the connection list.
+pub type InboundEventSender = mpsc::Sender<UserInbound>;
 
-pub enum ConnEvent {
-    Add(ConnWithID),
+/// When the data server receives a user request (generally from the browser or terminal),
+/// when it will send `Add` to send a bridge with the control server.
+pub enum UserInbound {
+    Add(crate::bridge::IdDataSenderBridge),
     Remove(Bytes),
-}
-
-// this channel has two purposes:
-// 1. when the server receives `Start` action from `data` streaming,
-// the server will send `DataSender` through this channel,
-// 2. when the server receives `Sending` from `data` streaming,
-// the server will send `Data` through this channel.
-pub type ConnChan = mpsc::Sender<ConnChanDataType>;
-
-pub struct ConnWithID {
-    pub id: Bytes,
-    pub conn: Conn,
-}
-
-pub struct Conn {
-    pub chan: ConnChan,
-    // when the server receives `Close` action from `data` streaming,
-    // the server will cancel the connection.
-    pub cancel: CancellationToken,
-}
-
-pub enum ConnChanDataType {
-    DataSender(mpsc::Sender<Vec<u8>>),
-    Data(Vec<u8>),
 }

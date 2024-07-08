@@ -1,20 +1,20 @@
-use bytes::Bytes;
-use std::sync::Arc;
-use std::{net::ToSocketAddrs, pin::Pin};
-use tunneld_pkg::io::CancellableReceiver;
-use tunneld_pkg::shutdown::{self, ShutdownListener};
-
-use crate::transport::EventBus;
+use crate::data_server::DataServer;
 use anyhow::Context as _;
+use bytes::Bytes;
 use dashmap::DashMap;
 use futures::{Future, StreamExt};
+use std::sync::Arc;
+use std::{net::ToSocketAddrs, pin::Pin};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
 use tracing::{debug, error, info};
+use tunneld_pkg::bridge::{self, BridgeData};
 use tunneld_pkg::event;
+use tunneld_pkg::io::CancellableReceiver;
+use tunneld_pkg::shutdown::{self, ShutdownListener};
 use tunneld_protocol::pb::{
     control::Payload,
     tunnel::Config::Http,
@@ -26,37 +26,34 @@ use tunneld_protocol::pb::{traffic_to_server, TrafficToServer};
 use tunneld_protocol::validate::validate_register_req;
 use uuid::Uuid;
 
-pub struct Handler {
-    event_tx: mpsc::Sender<event::Event>,
-    // bridge the connection between handler and event_bus
-    bridges: Arc<DashMap<Bytes, event::Conn>>,
-    close_sender_notifiers: Arc<DashMap<Bytes, CancellationToken>>,
-    shutdown: ShutdownListener,
-
-    _priv: (),
-}
-
-impl Handler {
-    pub fn new(shutdown: ShutdownListener, event_tx: mpsc::Sender<event::Event>) -> Self {
-        Self {
-            bridges: Arc::new(DashMap::new()),
-            close_sender_notifiers: Arc::new(DashMap::new()),
-            event_tx,
-            shutdown,
-            _priv: (),
-        }
-    }
-}
-
 type GrpcResult<T> = Result<T, Status>;
 type GrpcResponse<T> = GrpcResult<Response<T>>;
 type RegisterStream = Pin<Box<CancellableReceiver<GrpcResult<Control>>>>;
 type DataStream = Pin<Box<dyn Stream<Item = GrpcResult<TrafficToClient>> + Send>>;
 
+/// Server is the control server of the tunnel daemon.
+///
+/// We treat the control server is grpc server as well, in the concept,
+/// they are same thing.
+/// Although the grpc server provides a [`tunneld_protocol::pb::tunnel_service_server::TunnelService::data`],
+/// it's similar to the data server(a little), but in the `data` function body,
+/// the most of work is to forward the data from client to data server.
+/// We can understand this is a tunnel between the client and the data server.
 pub struct Server {
+    /// control_port is the port of the control server.
+    ///
+    /// the client will connect to this port to register a tunnel.
     control_port: u16,
+
+    /// control_server is the grpc server instance.
     control_server: GrpcServer,
-    event_bus: EventBus,
+
+    /// event_bus is the event bus of the server.
+    event_bus: DataServer,
+
+    /// shutdown is the shutdown listener of the server.
+    /// when the shutdown signal is received, shutdown the server
+    /// by [`tunneld_pkg::shutdown::Shutdown::notify`].
     shutdown: shutdown::Shutdown,
 }
 
@@ -66,7 +63,7 @@ impl Server {
         let server = GrpcServer::builder()
             .http2_keepalive_interval(Some(tokio::time::Duration::from_secs(60)))
             .http2_keepalive_timeout(Some(tokio::time::Duration::from_secs(3)));
-        let events = EventBus::new(vhttp_port, domain);
+        let events = DataServer::new(vhttp_port, domain);
 
         Self {
             control_port,
@@ -76,6 +73,17 @@ impl Server {
         }
     }
 
+    /// Run the server, this function blocks on the shutdown future.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// async fn run_server() {
+    ///     let server = tunneld_server::Server::new(6610, 6611, String::from("example.com"));
+    ///     let shutdown = tokio::signal::ctrl_c();
+    ///     server.run(shutdown).await.unwrap();
+    /// }
+    /// ```
     pub async fn run(self, shutdown: impl Future) -> anyhow::Result<()> {
         let addr = format!("0.0.0.0:{}", self.control_port)
             .to_socket_addrs()
@@ -89,7 +97,7 @@ impl Server {
         let shutdown_listener_control_server = self.shutdown.listen();
         let shutdown_listener_event_bus = self.shutdown.listen();
 
-        let handler = Handler::new(self.shutdown.listen(), event_tx);
+        let handler = ControlHandler::new(self.shutdown.listen(), event_tx);
         let event_bus = self.event_bus;
         tokio::spawn(async move {
             event_bus
@@ -125,8 +133,28 @@ impl Server {
     }
 }
 
+/// ControlHeader is the core of the control server,
+/// it implements the grpc TunnelService.
+struct ControlHandler {
+    event_tx: mpsc::Sender<event::ClientEvent>,
+    bridges: Arc<DashMap<Bytes, bridge::DataSenderBridge>>,
+    close_sender_notifiers: Arc<DashMap<Bytes, CancellationToken>>,
+    shutdown: ShutdownListener,
+}
+
+impl ControlHandler {
+    fn new(shutdown: ShutdownListener, event_tx: mpsc::Sender<event::ClientEvent>) -> Self {
+        Self {
+            bridges: Arc::new(DashMap::new()),
+            close_sender_notifiers: Arc::new(DashMap::new()),
+            event_tx,
+            shutdown,
+        }
+    }
+}
+
 #[tonic::async_trait]
-impl TunnelService for Handler {
+impl TunnelService for ControlHandler {
     type RegisterStream = RegisterStream;
 
     async fn register(&self, req: Request<RegisterReq>) -> GrpcResponse<self::RegisterStream> {
@@ -157,7 +185,7 @@ impl TunnelService for Handler {
         let event_tx = self.event_tx.clone();
 
         let (resp_tx, resp_rx) = oneshot::channel();
-        let (conn_event_chan_tx, mut conn_event_chan_rx) = mpsc::channel::<event::ConnEvent>(1024);
+        let (user_inbound_tx, mut user_inbound_rx) = mpsc::channel::<event::UserInbound>(1024);
 
         match req.tunnel.as_ref().unwrap().config.as_ref().unwrap() {
             Tcp(tcp) => {
@@ -167,12 +195,12 @@ impl TunnelService for Handler {
                 );
                 let remote_port = tcp.remote_port.to_owned();
                 event_tx
-                    .send(event::Event {
+                    .send(event::ClientEvent {
                         payload: event::Payload::RegisterTcp {
                             port: remote_port as u16,
                         },
                         close_listener: register_cancel.clone(),
-                        conn_event_chan: conn_event_chan_tx,
+                        incoming_events: user_inbound_tx,
                         resp: resp_tx,
                     })
                     .await
@@ -181,14 +209,14 @@ impl TunnelService for Handler {
             }
             Http(http) => {
                 event_tx
-                    .send(event::Event {
+                    .send(event::ClientEvent {
                         payload: event::Payload::RegisterHttp {
                             port: http.remote_port as u16,
                             subdomain: Bytes::from(http.subdomain.to_owned()),
                             domain: Bytes::from(http.domain.to_owned()),
                         },
                         close_listener: register_cancel.clone(),
-                        conn_event_chan: conn_event_chan_tx,
+                        incoming_events: user_inbound_tx,
                         resp: resp_tx,
                     })
                     .await
@@ -212,7 +240,7 @@ impl TunnelService for Handler {
         }
 
         let shutdown_listener = self.shutdown.clone();
-        let connections = self.bridges.clone();
+        let bridges = self.bridges.clone();
         let register_cancel_listener = register_cancel.clone();
         let close_sender_notifiers = Arc::clone(&self.close_sender_notifiers);
         tokio::spawn(async move {
@@ -226,25 +254,25 @@ impl TunnelService for Handler {
                         debug!("register cancelled, close the control stream");
                         return;
                     }
-                    Some(connection) = conn_event_chan_rx.recv() => {
+                    Some(connection) = user_inbound_rx.recv() => {
                         match connection {
-                            event::ConnEvent::Add(connection) => {
-                                debug!("new user connection {}", String::from_utf8_lossy(connection.id.to_vec().as_slice()));
-                                let connection_id = String::from_utf8_lossy(connection.id.to_vec().as_slice()).to_string();
-                                connections.insert(connection.id, connection.conn);
+                            event::UserInbound::Add(bridge) => {
+                                debug!("new user connection {}", String::from_utf8_lossy(bridge.id.to_vec().as_slice()));
+                                let bridge_id = String::from_utf8_lossy(bridge.id.to_vec().as_slice()).to_string();
+                                bridges.insert(bridge.id, bridge.inner);
                                 outbound_streaming_tx
                                     .send(Ok(Control {
                                         command: Command::Work as i32,
-                                        payload: Some(Payload::Work(WorkPayload { connection_id })),
+                                        payload: Some(Payload::Work(WorkPayload { connection_id: bridge_id })),
                                     }))
                                     .await
                                     .context("failed to send work command")
                                     .unwrap();
                             }
-                            event::ConnEvent::Remove(connection_id) => {
-                                debug!("remove user connection: {}", String::from_utf8_lossy(connection_id.to_vec().as_slice()));
-                                connections.remove(&connection_id);
-                                close_sender_notifiers.remove(&connection_id).unwrap().1.cancel();
+                            event::UserInbound::Remove(bridge_id) => {
+                                debug!("remove user connection: {}", String::from_utf8_lossy(bridge_id.to_vec().as_slice()));
+                                bridges.remove(&bridge_id);
+                                close_sender_notifiers.remove(&bridge_id).unwrap().1.cancel();
                             }
                         }
                     }
@@ -261,11 +289,15 @@ impl TunnelService for Handler {
 
     type DataStream = DataStream;
 
+    /// data implements the grpc [`tunneld_protocol::pb::tunnel_service_server::TunnelService::data`].
+    ///
+    /// The data function is the core of the control server,
+    /// it forwards the data between the client and the data server.
     async fn data(
         &self,
         req: Request<Streaming<TrafficToServer>>,
     ) -> GrpcResponse<self::DataStream> {
-        let connections = self.bridges.clone();
+        let bridges = self.bridges.clone();
         let mut inbound_stream = req.into_inner();
         let (outbound_tx, outbound_rx) = mpsc::channel(256);
 
@@ -281,7 +313,7 @@ impl TunnelService for Handler {
                             Ok(traffic) => {
                                 let connection_id_str = traffic.connection_id;
                                 let connection_id = Bytes::copy_from_slice(connection_id_str.as_bytes());
-                                let connection = connections
+                                let connection = bridges
                                     .get(&connection_id)
                                     .context("connection not found")
                                     .unwrap();
@@ -307,7 +339,7 @@ impl TunnelService for Handler {
                                         let (transfer_tx, mut transfer_rx) = mpsc::channel(256);
                                         connection
                                             .chan
-                                            .send(event::ConnChanDataType::DataSender(transfer_tx))
+                                            .send(BridgeData::Sender(transfer_tx))
                                             .await
                                             .context("failed to send streaming_tx to data_sender_sender")
                                             .unwrap();
@@ -344,7 +376,7 @@ impl TunnelService for Handler {
                                         // client -> server
                                         connection
                                             .chan
-                                            .send(event::ConnChanDataType::Data(traffic.data))
+                                            .send(BridgeData::Data(traffic.data))
                                             .await
                                             .unwrap();
                                     }
@@ -353,7 +385,7 @@ impl TunnelService for Handler {
                                             "client finished sending traffic, connection_id: {}",
                                             connection_id_str
                                         );
-                                        connection.chan.send(event::ConnChanDataType::Data(vec![])).await.unwrap();
+                                        connection.chan.send(BridgeData::Data(vec![])).await.unwrap();
                                         return; // close the data streaming
                                     }
                                     Ok(traffic_to_server::Action::Close) => {
