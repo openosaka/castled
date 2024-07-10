@@ -174,7 +174,6 @@ impl<'a> Client<'a> {
         let is_udp = tunnel.r#type == Type::Udp as i32;
         let mut rpc_client = self.new_rpc_client().await?;
         let register = rpc_client.register(RegisterReq {
-            client_version: "todo".to_string(),
             tunnel: Some(tunnel),
         });
 
