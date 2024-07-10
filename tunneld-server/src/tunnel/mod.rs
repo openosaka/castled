@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 pub(crate) mod http;
 pub(crate) mod tcp;
+pub(crate) mod udp;
 
 pub(crate) struct BridgeResult {
     pub data_sender: mpsc::Sender<Vec<u8>>,
