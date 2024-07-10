@@ -31,9 +31,8 @@ message Control {
 }
 
 message InitPayload {
-  string server_version = 1;
-  string tunnel_id = 2;
-  string assigned_entrypoint = 3;
+  string tunnel_id = 1;
+  string assigned_entrypoint = 2;
 }
 
 // WorkPayload is sent when the server establishes a user connection.
@@ -75,8 +74,7 @@ message TrafficToClient {
 }
 
 message RegisterReq {
-  string client_version = 1;
-  Tunnel tunnel = 2;
+  Tunnel tunnel = 1;
 }
 
 // Each tunnel is a bidirectional connection between the client and the server.

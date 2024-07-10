@@ -169,7 +169,6 @@ impl TunnelService for ControlHandler {
         let init_command = Control {
             command: Command::Init as i32,
             payload: Some(Payload::Init(InitPayload {
-                server_version: "todo".to_string(),
                 tunnel_id: tenant_id.to_string(),
                 assigned_entrypoint: "todo".to_string(),
             })),
