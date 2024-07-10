@@ -190,8 +190,8 @@ impl TunnelService for ControlHandler {
         match req.tunnel.as_ref().unwrap().config.as_ref().unwrap() {
             Tcp(tcp) => {
                 debug!(
-                    "registering tcp tunnel on remote_port: {:?}",
-                    tcp.remote_port
+                    remote_port = tcp.remote_port,
+                    "registering tcp tunnel on remote_port"
                 );
                 let remote_port = tcp.remote_port.to_owned();
                 event_tx
@@ -204,8 +204,10 @@ impl TunnelService for ControlHandler {
                         resp: resp_tx,
                     })
                     .await
-                    .context("failed to register tcp tunnel")
-                    .unwrap();
+                    .map_err(|err| {
+                        error!("failed to register tcp tunnel: {}", err);
+                        Status::internal("failed to register tcp tunnel")
+                    })?;
             }
             Http(http) => {
                 event_tx
@@ -220,8 +222,10 @@ impl TunnelService for ControlHandler {
                         resp: resp_tx,
                     })
                     .await
-                    .context("failed to register http tunnel")
-                    .unwrap();
+                    .map_err(|err| {
+                        error!("failed to register http tunnel: {}", err);
+                        Status::internal("failed to register http tunnel")
+                    })?;
             }
             Udp(udp) => {
                 event_tx
@@ -234,8 +238,10 @@ impl TunnelService for ControlHandler {
                         resp: resp_tx,
                     })
                     .await
-                    .context("failed to register udp tunnel")
-                    .unwrap();
+                    .map_err(|err| {
+                        error!("failed to register udp tunnel: {}", err);
+                        Status::internal("failed to register udp tunnel")
+                    })?;
             }
         }
 
@@ -246,10 +252,12 @@ impl TunnelService for ControlHandler {
             }
             Err(err) => {
                 error!("register response: {:?}", err);
-                outbound_streaming_tx
+                if let Err(err) = outbound_streaming_tx
                     .send(Err(Status::internal("failed to create listener")))
                     .await
-                    .unwrap();
+                {
+                    error!(err = ?err, "failed to respond register request");
+                }
             }
         }
 
@@ -318,7 +326,7 @@ impl TunnelService for ControlHandler {
         let shutdown_listener = self.shutdown.clone();
         let close_sender_notifiers = Arc::clone(&self.close_sender_notifiers);
         tokio::spawn(async move {
-            let mut started = false;
+            let mut stream_started = false;
             loop {
                 tokio::select! {
                     _ = shutdown_listener.done() => { break }
@@ -339,11 +347,11 @@ impl TunnelService for ControlHandler {
                                             "received start action from connection {}, I am gonna start streaming",
                                             connection_id_str,
                                         );
-                                        if started {
+                                        if stream_started {
                                             error!("duplicate start action");
                                             return;
                                         }
-                                        started = true;
+                                        stream_started = true;
 
                                         let close_sender = CancellationToken::new();
                                         let close_sender_listener = close_sender.clone();
