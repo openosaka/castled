@@ -15,17 +15,17 @@ use tunneld_pkg::{
 
 pub struct Tcp {
     listener: TcpListener,
-    conn_event_sender: mpsc::Sender<event::UserIncoming>,
+    user_incoming_sender: mpsc::Sender<event::UserIncoming>,
 }
 
 impl Tcp {
     pub fn new(
         listener: TcpListener,
-        conn_event_sender: mpsc::Sender<event::UserIncoming>,
+        user_incoming_sender: mpsc::Sender<event::UserIncoming>,
     ) -> Self {
         Self {
             listener,
-            conn_event_sender,
+            user_incoming_sender,
         }
     }
 
@@ -50,14 +50,14 @@ impl Tcp {
                         return;
                     }
 
-                    let conn_event_chan = self.conn_event_sender.clone();
+                    let user_incoming_sender = self.user_incoming_sender.clone();
 
                     let BridgeResult{
                         data_sender,
                         data_receiver,
                         client_cancel_receiver,
                         remove_bridge_sender
-                    } = super::init_data_sender_bridge(conn_event_chan.clone()).await.unwrap();
+                    } = super::init_data_sender_bridge(user_incoming_sender.clone()).await.unwrap();
 
                     let (stream, _addr) = result.unwrap();
                     tokio::spawn(async move {

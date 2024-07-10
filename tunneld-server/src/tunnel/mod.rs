@@ -2,11 +2,15 @@ use anyhow::Context as _;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tunneld_pkg::{bridge, event};
+use tunneld_pkg::{
+    bridge::{self},
+    event,
+};
 use uuid::Uuid;
 
 pub(crate) mod http;
 pub(crate) mod tcp;
+pub(crate) mod udp;
 
 pub(crate) struct BridgeResult {
     pub data_sender: mpsc::Sender<Vec<u8>>,

@@ -23,6 +23,9 @@ pub enum Payload {
     RegisterTcp {
         port: u16,
     },
+    RegisterUdp {
+        port: u16,
+    },
     // RegisterHttp is used to notify the server to register a http tunnel.
     // must provide one of the following fields: port, subdomain, domain.
     RegisterHttp {

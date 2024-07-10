@@ -1,12 +1,14 @@
 use crate::tunnel::http::{DynamicRegistry, FixedRegistry, Http};
 use crate::tunnel::tcp::Tcp;
+use crate::tunnel::udp::Udp;
 use bytes::Bytes;
 use std::sync::Arc;
 use tokio::{spawn, sync::mpsc};
 use tonic::Status;
 use tracing::debug;
 use tunneld_pkg::shutdown::ShutdownListener;
-use tunneld_pkg::{event, util::create_listener};
+use tunneld_pkg::util::create_udp_listener;
+use tunneld_pkg::{event, util::create_tcp_listener};
 
 /// DataServer is responsible for handling the data transfer
 /// between user connection and Grpc Server(of Control Server).
@@ -41,12 +43,28 @@ impl DataServer {
 
         while let Some(event) = receiver.recv().await {
             match event.payload {
-                event::Payload::RegisterTcp { port } => match create_listener(port).await {
+                event::Payload::RegisterTcp { port } => match create_tcp_listener(port).await {
                     Ok(listener) => {
                         let cancel = event.close_listener;
                         let conn_event_chan = event.incoming_events;
                         spawn(async move {
                             Tcp::new(listener, conn_event_chan.clone())
+                                .serve(cancel)
+                                .await;
+                            debug!("tcp listener on {} closed", port);
+                        });
+                        event.resp.send(None).unwrap(); // success
+                    }
+                    Err(status) => {
+                        event.resp.send(Some(status)).unwrap();
+                    }
+                },
+                event::Payload::RegisterUdp { port } => match create_udp_listener(port).await {
+                    Ok(listener) => {
+                        let cancel = event.close_listener;
+                        let conn_event_chan = event.incoming_events;
+                        spawn(async move {
+                            Udp::new(listener, conn_event_chan.clone())
                                 .serve(cancel)
                                 .await;
                             debug!("tcp listener on {} closed", port);

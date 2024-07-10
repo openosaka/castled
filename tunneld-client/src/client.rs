@@ -26,10 +26,17 @@ use tunneld_protocol::pb::{
 pub struct Client<'a> {
     control_addr: &'a SocketAddr,
     tcp_tunnels: Vec<TcpTunnel>,
+    udp_tunnels: Vec<UdpTunnel>,
     http_tunnels: Vec<HttpTunnel>,
 }
 
 struct TcpTunnel {
+    name: String,
+    remote_port: u16,
+    local_endpoint: SocketAddr,
+}
+
+struct UdpTunnel {
     name: String,
     remote_port: u16,
     local_endpoint: SocketAddr,
@@ -48,6 +55,7 @@ impl<'a> Client<'a> {
         Ok(Self {
             control_addr: addr,
             tcp_tunnels: Vec::new(),
+            udp_tunnels: Vec::new(),
             http_tunnels: Vec::new(),
         })
     }
@@ -67,6 +75,22 @@ impl<'a> Client<'a> {
                 shutdown_listener.clone(),
                 tunnel,
                 tcp_tunnel.local_endpoint,
+            ));
+        }
+
+        for udp_tunnel in self.udp_tunnels.iter() {
+            let tunnel = Tunnel {
+                name: udp_tunnel.name.to_string(),
+                r#type: Type::Tcp as i32,
+                config: Some(tunnel::Config::Tcp(TcpConfig {
+                    remote_port: udp_tunnel.remote_port as i32,
+                })),
+                ..Default::default()
+            };
+            tasks.push(self.handle_tunnel(
+                shutdown_listener.clone(),
+                tunnel,
+                udp_tunnel.local_endpoint,
             ));
         }
 
@@ -105,6 +129,18 @@ impl<'a> Client<'a> {
             remote_port, local_endpoint,
         );
         self.tcp_tunnels.push(TcpTunnel {
+            name,
+            remote_port,
+            local_endpoint,
+        });
+    }
+
+    pub fn add_udp_tunnel(&mut self, name: String, local_endpoint: SocketAddr, remote_port: u16) {
+        debug!(
+            "Registering UDP tunnel, remote_port: {}, local_endpoint: {}",
+            remote_port, local_endpoint,
+        );
+        self.udp_tunnels.push(UdpTunnel {
             name,
             remote_port,
             local_endpoint,
