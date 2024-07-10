@@ -19,6 +19,7 @@ use tunneld_protocol::pb::{
     control::Payload,
     tunnel::Config::Http,
     tunnel::Config::Tcp,
+    tunnel::Config::Udp,
     tunnel_service_server::{TunnelService, TunnelServiceServer},
     Command, Control, InitPayload, RegisterReq, TrafficToClient, WorkPayload,
 };
@@ -221,6 +222,20 @@ impl TunnelService for ControlHandler {
                     })
                     .await
                     .context("failed to register http tunnel")
+                    .unwrap();
+            }
+            Udp(udp) => {
+                event_tx
+                    .send(event::ClientEvent {
+                        payload: event::Payload::RegisterUdp {
+                            port: udp.remote_port as u16,
+                        },
+                        close_listener: register_cancel.clone(),
+                        incoming_events: user_incoming_tx,
+                        resp: resp_tx,
+                    })
+                    .await
+                    .context("failed to register udp tunnel")
                     .unwrap();
             }
         }

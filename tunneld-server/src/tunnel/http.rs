@@ -20,7 +20,7 @@ use tracing::{debug, info, info_span, Instrument as _};
 use tunneld_pkg::bridge::BridgeData;
 use tunneld_pkg::event::IncomingEventSender;
 use tunneld_pkg::shutdown::ShutdownListener;
-use tunneld_pkg::util::create_listener;
+use tunneld_pkg::util::create_tcp_listener;
 use tunneld_pkg::{event, get_with_shutdown};
 
 static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
@@ -60,7 +60,7 @@ impl Http {
         {
             let shutdown = shutdown.clone();
             let vhttp_listener =
-                get_with_shutdown!(create_listener(this.port), shutdown.cancelled())?;
+                get_with_shutdown!(create_tcp_listener(this.port), shutdown.cancelled())?;
 
             let http1_builder = Arc::clone(&http1_builder);
             let vhttp_handler = async move {

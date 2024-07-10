@@ -5,12 +5,12 @@ use bytes::Bytes;
 use futures::future::join_all;
 use tokio::{
     io::{self, AsyncRead, AsyncWrite, AsyncWriteExt},
-    net::TcpStream,
+    net::{TcpStream, UdpSocket},
     sync::mpsc,
 };
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{transport::Channel, Streaming};
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 use tunneld_pkg::{
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
     select_with_shutdown, shutdown,
@@ -21,15 +21,23 @@ use tunneld_protocol::pb::{
     tunnel::{self, Type},
     tunnel_service_client::TunnelServiceClient,
     Command, Control, HttpConfig, RegisterReq, TcpConfig, TrafficToClient, TrafficToServer, Tunnel,
+    UdpConfig,
 };
 
 pub struct Client<'a> {
     control_addr: &'a SocketAddr,
     tcp_tunnels: Vec<TcpTunnel>,
+    udp_tunnels: Vec<UdpTunnel>,
     http_tunnels: Vec<HttpTunnel>,
 }
 
 struct TcpTunnel {
+    name: String,
+    remote_port: u16,
+    local_endpoint: SocketAddr,
+}
+
+struct UdpTunnel {
     name: String,
     remote_port: u16,
     local_endpoint: SocketAddr,
@@ -48,6 +56,7 @@ impl<'a> Client<'a> {
         Ok(Self {
             control_addr: addr,
             tcp_tunnels: Vec::new(),
+            udp_tunnels: Vec::new(),
             http_tunnels: Vec::new(),
         })
     }
@@ -67,6 +76,22 @@ impl<'a> Client<'a> {
                 shutdown_listener.clone(),
                 tunnel,
                 tcp_tunnel.local_endpoint,
+            ));
+        }
+
+        for udp_tunnel in self.udp_tunnels.iter() {
+            let tunnel = Tunnel {
+                name: udp_tunnel.name.to_string(),
+                r#type: Type::Udp as i32,
+                config: Some(tunnel::Config::Udp(UdpConfig {
+                    remote_port: udp_tunnel.remote_port as i32,
+                })),
+                ..Default::default()
+            };
+            tasks.push(self.handle_tunnel(
+                shutdown_listener.clone(),
+                tunnel,
+                udp_tunnel.local_endpoint,
             ));
         }
 
@@ -111,6 +136,18 @@ impl<'a> Client<'a> {
         });
     }
 
+    pub fn add_udp_tunnel(&mut self, name: String, local_endpoint: SocketAddr, remote_port: u16) {
+        debug!(
+            "Registering UDP tunnel, remote_port: {}, local_endpoint: {}",
+            remote_port, local_endpoint,
+        );
+        self.udp_tunnels.push(UdpTunnel {
+            name,
+            remote_port,
+            local_endpoint,
+        });
+    }
+
     pub fn add_http_tunnel(
         &mut self,
         name: String,
@@ -134,6 +171,7 @@ impl<'a> Client<'a> {
         tunnel: Tunnel,
         local_endpoint: SocketAddr,
     ) -> Result<()> {
+        let is_udp = tunnel.r#type == Type::Udp as i32;
         let mut rpc_client = self.new_rpc_client().await?;
         let register = rpc_client.register(RegisterReq {
             client_version: "todo".to_string(),
@@ -152,6 +190,7 @@ impl<'a> Client<'a> {
                         rpc_client,
                         register_resp,
                         local_endpoint,
+                        is_udp,
                     )
                     .await
                 }
@@ -165,6 +204,7 @@ impl<'a> Client<'a> {
         rpc_client: TunnelServiceClient<Channel>,
         register_resp: tonic::Response<Streaming<Control>>,
         local_endpoint: SocketAddr,
+        is_udp: bool,
     ) -> Result<()> {
         let mut control_stream = register_resp.into_inner();
         let mut initialized = false;
@@ -212,7 +252,12 @@ impl<'a> Client<'a> {
                                 }
                                 Some(Payload::Work(work)) => {
                                     debug!("received work command, starting to forward traffic");
-                                    if let Err(e) = handle_work_traffic(rpc_client.clone() /* cheap clone operation */, &work.connection_id, local_endpoint).await {
+                                    if let Err(e) = handle_work_traffic(
+                                        rpc_client.clone() /* cheap clone operation */,
+                                        &work.connection_id,
+                                        local_endpoint,
+                                        is_udp,
+                                    ).await {
                                         error!("failed to handle work traffic: {:?}", e);
                                     } else {
                                         continue; // the only path to success.
@@ -249,10 +294,12 @@ impl<'a> Client<'a> {
     }
 }
 
+#[instrument(skip(rpc_client))]
 async fn handle_work_traffic(
     mut rpc_client: TunnelServiceClient<Channel>,
     connection_id: &str,
     local_endpoint: SocketAddr,
+    is_udp: bool,
 ) -> Result<()> {
     // write response to the streaming_tx
     // rpc_client sends the data from reading the streaming_rx
@@ -272,7 +319,7 @@ async fn handle_work_traffic(
 
     // write the data streaming response to transfer_tx,
     // then forward_traffic_to_local can read the data from transfer_rx
-    let (transfer_tx, transfer_rx) = mpsc::channel::<TrafficToClient>(64);
+    let (transfer_tx, mut transfer_rx) = mpsc::channel::<TrafficToClient>(64);
 
     tokio::spawn(async move {
         let mut streaming_response = rpc_client
@@ -301,34 +348,78 @@ async fn handle_work_traffic(
     });
 
     let wrapper = TrafficToServerWrapper::new(connection_id.clone());
-    let writer = StreamingWriter::new(streaming_tx.clone(), wrapper);
-    tokio::spawn(async move {
-        let local_conn = TcpStream::connect(local_endpoint).await;
-        if local_conn.is_err() {
-            error!("failed to connect to local endpoint {}, so let's notify the server to close the user connection", local_endpoint);
+    let mut writer = StreamingWriter::new(streaming_tx.clone(), wrapper);
 
-            streaming_tx
-                .send(TrafficToServer {
-                    connection_id: connection_id.to_string(),
-                    action: traffic_to_server::Action::Close as i32,
-                    ..Default::default()
-                })
-                .await
-                .context("terrible, the server may be crashed")
-                .unwrap();
-            return;
-        }
+    if is_udp {
+        tokio::spawn(async move {
+            let local_addr: SocketAddr = if local_endpoint.is_ipv4() {
+                "0.0.0.0:0"
+            } else {
+                "[::]:0"
+            }
+            .parse()
+            .unwrap();
+            let socket = UdpSocket::bind(local_addr).await;
+            if socket.is_err() {
+                error!(err = ?socket.err(), "failed to init udp socket, so let's notify the server to close the user connection");
 
-        let mut local_conn = local_conn.unwrap();
-        let (local_r, local_w) = local_conn.split();
+                streaming_tx
+                    .send(TrafficToServer {
+                        connection_id: connection_id.to_string(),
+                        action: traffic_to_server::Action::Close as i32,
+                        ..Default::default()
+                    })
+                    .await
+                    .context("terrible, the server may be crashed")
+                    .unwrap();
+                return;
+            }
+            let socket = socket.unwrap();
+            let result = socket.connect(local_endpoint).await;
+            if let Err(err) = result {
+                error!(err = ?err, "failed to connect to local endpoint, so let's notify the server to close the user connection");
+            }
 
-        if let Err(err) =
-            forward_traffic_to_local(local_r, local_w, StreamingReader::new(transfer_rx), writer)
-                .await
-        {
-            debug!("failed to forward traffic to local: {:?}", err);
-        }
-    });
+            let buf = transfer_rx.recv().await.unwrap();
+            socket.send(&buf.data).await.unwrap();
+            let mut buf = vec![0u8; 65507];
+            let n = socket.recv(&mut buf).await;
+            writer.write_all(&buf[..n.unwrap()]).await.unwrap();
+            writer.shutdown().await.unwrap();
+        });
+    } else {
+        tokio::spawn(async move {
+            let local_conn = TcpStream::connect(local_endpoint).await;
+            if local_conn.is_err() {
+                error!("failed to connect to local endpoint {}, so let's notify the server to close the user connection", local_endpoint);
+
+                streaming_tx
+                    .send(TrafficToServer {
+                        connection_id: connection_id.to_string(),
+                        action: traffic_to_server::Action::Close as i32,
+                        ..Default::default()
+                    })
+                    .await
+                    .context("terrible, the server may be crashed")
+                    .unwrap();
+                return;
+            }
+
+            let mut local_conn = local_conn.unwrap();
+            let (local_r, local_w) = local_conn.split();
+
+            if let Err(err) = forward_traffic_to_local(
+                local_r,
+                local_w,
+                StreamingReader::new(transfer_rx),
+                writer,
+            )
+            .await
+            {
+                debug!("failed to forward traffic to local: {:?}", err);
+            }
+        });
+    }
 
     Ok(())
 }

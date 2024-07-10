@@ -45,6 +45,18 @@ enum Commands {
         )]
         local_addr: String,
     },
+    Udp {
+        #[clap(index = 1)]
+        port: u16,
+        #[arg(long, required = true)]
+        remote_port: u16,
+        #[arg(
+            long,
+            default_value = "127.0.0.1",
+            help = "Local address to bind to, e.g localhost, example.com"
+        )]
+        local_addr: String,
+    },
 }
 
 const TUNNEL_NAME: &str = "tunneld-client";
@@ -79,6 +91,14 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
             client.add_tcp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port);
+        }
+        Commands::Udp {
+            port,
+            remote_port,
+            local_addr,
+        } => {
+            let local_endpoint = parse_socket_addr(&local_addr, port).await?;
+            client.add_udp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port);
         }
         Commands::Http {
             port,

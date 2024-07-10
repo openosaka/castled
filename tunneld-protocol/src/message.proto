@@ -91,6 +91,7 @@ message Tunnel {
   enum Type {
     TCP = 0;
     HTTP = 10;
+    UDP = 20;
   }
 
   Type type = 3;
@@ -98,6 +99,7 @@ message Tunnel {
   oneof config {
     TCPConfig tcp = 4;
     HTTPConfig http = 5;
+    UDPConfig udp = 6;
   }
 }
 
@@ -119,3 +121,5 @@ message HTTPConfig {
 }
 
 message TCPConfig { int32 remote_port = 1; }
+
+message UDPConfig { int32 remote_port = 1; }
