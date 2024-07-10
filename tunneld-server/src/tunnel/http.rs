@@ -64,7 +64,7 @@ impl Http {
 
             let http1_builder = Arc::clone(&http1_builder);
             let vhttp_handler = async move {
-                info!("vhttp server started on port {}", this.port);
+                info!(port = this.port, "vhttp server started on port");
                 loop {
                     tokio::select! {
                         _ = shutdown.cancelled() => {

@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
-use tracing::{debug, error, info};
+use tracing::{error, info};
 use tunneld_pkg::bridge::{self, BridgeData};
 use tunneld_pkg::event;
 use tunneld_pkg::io::CancellableReceiver;
@@ -177,7 +177,7 @@ impl TunnelService for ControlHandler {
             .send(Ok(init_command))
             .await
             .map_err(|err| {
-                error!("failed to send control stream: {}", err);
+                error!(err = ?err, "failed to send control stream");
                 Status::internal("failed to send control stream")
             })?;
 
@@ -189,7 +189,7 @@ impl TunnelService for ControlHandler {
 
         match req.tunnel.as_ref().unwrap().config.as_ref().unwrap() {
             Tcp(tcp) => {
-                debug!(
+                info!(
                     remote_port = tcp.remote_port,
                     "registering tcp tunnel on remote_port"
                 );
@@ -205,7 +205,7 @@ impl TunnelService for ControlHandler {
                     })
                     .await
                     .map_err(|err| {
-                        error!("failed to register tcp tunnel: {}", err);
+                        error!(err = ?err, "failed to register tcp tunnel");
                         Status::internal("failed to register tcp tunnel")
                     })?;
             }
@@ -223,7 +223,7 @@ impl TunnelService for ControlHandler {
                     })
                     .await
                     .map_err(|err| {
-                        error!("failed to register http tunnel: {}", err);
+                        error!(err = ?err, "failed to register http tunnel");
                         Status::internal("failed to register http tunnel")
                     })?;
             }
@@ -239,7 +239,7 @@ impl TunnelService for ControlHandler {
                     })
                     .await
                     .map_err(|err| {
-                        error!("failed to register udp tunnel: {}", err);
+                        error!(err = ?err, "failed to register udp tunnel");
                         Status::internal("failed to register udp tunnel")
                     })?;
             }
@@ -251,7 +251,7 @@ impl TunnelService for ControlHandler {
                 outbound_streaming_tx.send(Err(status)).await.unwrap();
             }
             Err(err) => {
-                error!("register response: {:?}", err);
+                error!(err = ?err, "failed to send response to client, the connection may be closed");
                 if let Err(err) = outbound_streaming_tx
                     .send(Err(Status::internal("failed to create listener")))
                     .await
@@ -269,18 +269,18 @@ impl TunnelService for ControlHandler {
             loop {
                 tokio::select! {
                     _ = shutdown_listener.done() => {
-                        debug!("server closed, close the control stream");
+                        info!("server closed, close the control stream");
                         return;
                     }
                     _ = register_cancel_listener.cancelled() => {
-                        debug!("register cancelled, close the control stream");
+                        info!("register cancelled, close the control stream");
                         return;
                     }
                     Some(connection) = user_incoming_rx.recv() => {
                         match connection {
                             event::UserIncoming::Add(bridge) => {
-                                debug!("new user connection {}", String::from_utf8_lossy(bridge.id.to_vec().as_slice()));
                                 let bridge_id = String::from_utf8_lossy(bridge.id.to_vec().as_slice()).to_string();
+                                info!(bridge_id = ?bridge_id, "new user connection");
                                 bridges.insert(bridge.id, bridge.inner);
                                 outbound_streaming_tx
                                     .send(Ok(Control {
@@ -292,7 +292,10 @@ impl TunnelService for ControlHandler {
                                     .unwrap();
                             }
                             event::UserIncoming::Remove(bridge_id) => {
-                                debug!("remove user connection: {}", String::from_utf8_lossy(bridge_id.to_vec().as_slice()));
+                                {
+                                    let bridge_id = String::from_utf8_lossy(bridge_id.to_vec().as_slice()).to_string();
+                                    info!(bridge_id = ?bridge_id, "remove user connection");
+                                }
                                 bridges.remove(&bridge_id);
                                 close_sender_notifiers.remove(&bridge_id).unwrap().1.cancel();
                             }
@@ -343,7 +346,7 @@ impl TunnelService for ControlHandler {
 
                                 match traffic_to_server::Action::try_from(traffic.action) {
                                     Ok(traffic_to_server::Action::Start) => {
-                                        debug!(
+                                        info!(
                                             "received start action from connection {}, I am gonna start streaming",
                                             connection_id_str,
                                         );
@@ -391,7 +394,7 @@ impl TunnelService for ControlHandler {
                                         });
                                     }
                                     Ok(traffic_to_server::Action::Sending) => {
-                                        debug!(
+                                        info!(
                                             "client is sending traffic, connection_id: {}",
                                             connection_id_str
                                         );
@@ -403,7 +406,7 @@ impl TunnelService for ControlHandler {
                                             .unwrap();
                                     }
                                     Ok(traffic_to_server::Action::Finished) => {
-                                        debug!(
+                                        info!(
                                             "client finished sending traffic, connection_id: {}",
                                             connection_id_str
                                         );
@@ -411,7 +414,7 @@ impl TunnelService for ControlHandler {
                                         return; // close the data streaming
                                     }
                                     Ok(traffic_to_server::Action::Close) => {
-                                        debug!("client closed streaming, connection_id: {}", connection_id_str);
+                                        info!("client closed streaming, connection_id: {}", connection_id_str);
                                         connection.cancel.cancel();
                                         return; // close the data streaming
                                     }
