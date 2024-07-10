@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use std::net::{SocketAddr, ToSocketAddrs};
-use tokio::signal;
+use tokio::{net::lookup_host, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tunneld_pkg::{otel::setup_logging, shutdown};
@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
             remote_port,
             local_addr,
         } => {
-            let local_endpoint = parse_socket_addr(&local_addr, port)?;
+            let local_endpoint = parse_socket_addr(&local_addr, port).await?;
             client.add_tcp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port);
         }
         Commands::Http {
@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
             subdomain,
             domain,
         } => {
-            let local_endpoint = parse_socket_addr(&local_addr, port)?;
+            let local_endpoint = parse_socket_addr(&local_addr, port).await?;
             client.add_http_tunnel(
                 TUNNEL_NAME.to_string(),
                 local_endpoint,
@@ -103,10 +103,20 @@ async fn main() -> anyhow::Result<()> {
         .await
 }
 
-fn parse_socket_addr(local_addr: &str, port: u16) -> anyhow::Result<SocketAddr> {
-    let mut addrs = format!("{}:{}", local_addr, port).to_socket_addrs()?;
-    if addrs.len() != 1 {
-        return Err(anyhow::anyhow!("Invalid address"));
+async fn parse_socket_addr(local_addr: &str, port: u16) -> anyhow::Result<SocketAddr> {
+    let addr = format!("{}:{}", local_addr, port);
+    let mut addrs = addr.to_socket_addrs()?;
+    if addrs.len() == 1 {
+        return Ok(addrs.next().unwrap());
     }
-    Ok(addrs.next().unwrap())
+    let ips = lookup_host(addr).await?.collect::<Vec<_>>();
+    if !ips.is_empty() {
+        info!(port = port, ips = ?ips, "dns parsed",);
+
+        let mut ip = ips[0];
+        ip.set_port(port);
+        return Ok(ip);
+    }
+
+    Err(anyhow::anyhow!("Invalid address"))
 }
