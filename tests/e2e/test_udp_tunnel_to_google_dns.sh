@@ -1,5 +1,5 @@
 #!/bin/bash
-# set -x
+set -x
 
 root_dir=$(git rev-parse --show-toplevel)
 cur_dir=$root_dir/tests/e2e
@@ -19,7 +19,7 @@ wait_port 6610
 
 exec ./target/debug/tunnel udp 53 --remote-port 10053 --local-addr 8.8.8.8 &
 client_pid=$!
-wait_port 10053
+wait_port_on_udp 10053
 
 output=$(dig @127.0.0.1 -p 10053 +noedns google.com)
 if echo "$output" | grep -q "ANSWER SECTION"; then

@@ -1,6 +1,8 @@
-use crate::tunnel::http::{DynamicRegistry, FixedRegistry, Http};
-use crate::tunnel::tcp::Tcp;
-use crate::tunnel::udp::Udp;
+use crate::tunnel::{
+    http::{DynamicRegistry, FixedRegistry, Http},
+    tcp::Tcp,
+    udp::Udp,
+};
 use bytes::Bytes;
 use std::sync::Arc;
 use tokio::{spawn, sync::mpsc};
@@ -67,7 +69,7 @@ impl DataServer {
                             Udp::new(listener, conn_event_chan.clone())
                                 .serve(cancel)
                                 .await;
-                            debug!("tcp listener on {} closed", port);
+                            debug!("udp listener on {} closed", port);
                         });
                         event.resp.send(None).unwrap(); // success
                     }
