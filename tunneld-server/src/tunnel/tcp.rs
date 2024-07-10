@@ -7,7 +7,7 @@ use tokio::{
     sync::mpsc,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, error};
 use tunneld_pkg::{
     event,
     io::{StreamingReader, StreamingWriter, VecWrapper},
@@ -41,7 +41,7 @@ impl Tcp {
                             Some(result)
                         }
                         Err(err) => {
-                            debug!("failed to accept connection: {:?}", err);
+                            error!(err = ?err, "failed to accept connection");
                             None
                         }
                     }

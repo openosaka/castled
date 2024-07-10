@@ -7,7 +7,7 @@ use bytes::Bytes;
 use std::sync::Arc;
 use tokio::{spawn, sync::mpsc};
 use tonic::Status;
-use tracing::debug;
+use tracing::info;
 use tunneld_pkg::shutdown::ShutdownListener;
 use tunneld_pkg::util::create_udp_listener;
 use tunneld_pkg::{event, util::create_tcp_listener};
@@ -53,7 +53,7 @@ impl DataServer {
                             Tcp::new(listener, conn_event_chan.clone())
                                 .serve(cancel)
                                 .await;
-                            debug!("tcp listener on {} closed", port);
+                            info!("tcp listener on {} closed", port);
                         });
                         event.resp.send(None).unwrap(); // success
                     }
@@ -69,7 +69,7 @@ impl DataServer {
                             Udp::new(listener, conn_event_chan.clone())
                                 .serve(cancel)
                                 .await;
-                            debug!("udp listener on {} closed", port);
+                            info!("udp listener on {} closed", port);
                         });
                         event.resp.send(None).unwrap(); // success
                     }
@@ -112,7 +112,7 @@ impl DataServer {
             }
         }
 
-        debug!("tcp manager quit");
+        info!("tcp manager quit");
         Ok(())
     }
 

@@ -10,7 +10,7 @@ use tokio::{
 };
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{transport::Channel, Streaming};
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, info, instrument};
 use tunneld_pkg::{
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
     select_with_shutdown, shutdown,
@@ -125,9 +125,10 @@ impl<'a> Client<'a> {
     }
 
     pub fn add_tcp_tunnel(&mut self, name: String, local_endpoint: SocketAddr, remote_port: u16) {
-        debug!(
-            "Registering TCP tunnel, remote_port: {}, local_endpoint: {}",
-            remote_port, local_endpoint,
+        info!(
+            remote_port = remote_port,
+            local_endpoint = ?local_endpoint,
+            "Registering TCP tunnel",
         );
         self.tcp_tunnels.push(TcpTunnel {
             name,
@@ -137,9 +138,10 @@ impl<'a> Client<'a> {
     }
 
     pub fn add_udp_tunnel(&mut self, name: String, local_endpoint: SocketAddr, remote_port: u16) {
-        debug!(
-            "Registering UDP tunnel, remote_port: {}, local_endpoint: {}",
-            remote_port, local_endpoint,
+        info!(
+            remote_port = remote_port,
+            local_endpoint = ?local_endpoint,
+            "Registering UDP tunnel"
         );
         self.udp_tunnels.push(UdpTunnel {
             name,
@@ -180,7 +182,7 @@ impl<'a> Client<'a> {
         select_with_shutdown!(register, shutdown_listener.done(), register_resp, {
             match register_resp {
                 Err(e) => {
-                    error!("failed to register tunnel: {:?}", e);
+                    error!(err = ?e, "failed to register tunnel");
                     Err(e.into())
                 }
                 Ok(register_resp) => {
@@ -228,7 +230,7 @@ impl<'a> Client<'a> {
                             match control.payload {
                                 Some(Payload::Init(init)) => {
                                     initialized = true;
-                                    debug!("received init command, tunnel initialized with id {}", init.tunnel_id);
+                                    debug!(tunnel_id = init.tunnel_id, "received init command");
                                     continue; // the only path to success.
                                 }
                                 Some(Payload::Work(_)) => {
@@ -257,7 +259,7 @@ impl<'a> Client<'a> {
                                         local_endpoint,
                                         is_udp,
                                     ).await {
-                                        error!("failed to handle work traffic: {:?}", e);
+                                        error!(err = ?e, "failed to handle work traffic");
                                     } else {
                                         continue; // the only path to success.
                                     }
@@ -269,7 +271,7 @@ impl<'a> Client<'a> {
                             break;
                         },
                         _ => {
-                            error!("unexpected command: {:?}", control.command);
+                            error!(command = %control.command, "unexpected command");
                         }
                     }
                 }
@@ -283,8 +285,9 @@ impl<'a> Client<'a> {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     async fn new_rpc_client(&self) -> Result<TunnelServiceClient<Channel>> {
-        debug!("connecting server at {}", self.control_addr);
+        debug!("connecting server");
 
         TunnelServiceClient::connect(format!("http://{}", self.control_addr))
             .await
@@ -445,7 +448,7 @@ async fn forward_traffic_to_local(
                 let _ = local_w.shutdown().await;
             }
             Err(err) => {
-                error!("failed to copy from remote to local: {:?}", err)
+                error!(err = ?err, "failed to copy from remote to local");
             }
         }
     };
@@ -458,7 +461,7 @@ async fn forward_traffic_to_local(
                 let _ = remote_w.shutdown().await;
             }
             Err(err) => {
-                error!("failed to copy from local to remote: {:?}", err)
+                error!(err = ?err, "failed to copy from local to remote")
             }
         }
     };
