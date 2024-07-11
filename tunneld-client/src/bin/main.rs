@@ -28,6 +28,8 @@ enum Commands {
             help = "Local address to bind to, e.g localhost, example.com"
         )]
         local_addr: String,
+        #[arg(long, default_value = "false")]
+        random_remote_port: bool,
     },
     Http {
         #[clap(index = 1)]
@@ -44,6 +46,8 @@ enum Commands {
             help = "Local address to bind to, e.g localhost, example.com"
         )]
         local_addr: String,
+        #[arg(long, default_value = "false")]
+        random_remote_port: bool,
     },
     Udp {
         #[clap(index = 1)]
@@ -56,6 +60,8 @@ enum Commands {
             help = "Local address to bind to, e.g localhost, example.com"
         )]
         local_addr: String,
+        #[arg(long, default_value = "false")]
+        random_remote_port: bool,
     },
 }
 
@@ -88,17 +94,29 @@ async fn main() -> anyhow::Result<()> {
             port,
             remote_port,
             local_addr,
+            random_remote_port,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            client.add_tcp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port);
+            client.add_tcp_tunnel(
+                TUNNEL_NAME.to_string(),
+                local_endpoint,
+                remote_port,
+                random_remote_port,
+            );
         }
         Commands::Udp {
             port,
             remote_port,
             local_addr,
+            random_remote_port,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            client.add_udp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port);
+            client.add_udp_tunnel(
+                TUNNEL_NAME.to_string(),
+                local_endpoint,
+                remote_port,
+                random_remote_port,
+            );
         }
         Commands::Http {
             port,
@@ -106,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
             remote_port,
             subdomain,
             domain,
+            random_remote_port,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
             client.add_http_tunnel(
@@ -114,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
                 remote_port.unwrap_or(0),
                 Bytes::from(subdomain.unwrap_or_default()),
                 Bytes::from(domain.unwrap_or_default()),
+                random_remote_port,
             );
         }
     }

@@ -33,22 +33,74 @@ pub struct Client<'a> {
 
 struct TcpTunnel {
     name: String,
-    remote_port: u16,
     local_endpoint: SocketAddr,
+    remote_port: u16,
+    random_remote_port: bool,
 }
 
 struct UdpTunnel {
     name: String,
-    remote_port: u16,
     local_endpoint: SocketAddr,
+    remote_port: u16,
+    random_remote_port: bool,
 }
 
 struct HttpTunnel {
     name: String,
-    remote_port: u16,
     local_endpoint: SocketAddr,
-    subdomain: Bytes,
-    domain: Bytes,
+    config_fn: Box<dyn Fn() -> HttpConfig>,
+}
+
+type HttpConfigFn = Box<dyn Fn() -> HttpConfig>;
+
+fn domain_config(domain: Bytes) -> HttpConfigFn {
+    Box::new(move || HttpConfig {
+        domain: String::from_utf8_lossy(domain.as_ref()).to_string(),
+        random_subdomain: false,
+        remote_port: 0,
+        subdomain: String::new(),
+        random_remote_port: false,
+    })
+}
+
+fn subdomain_config(subdomain: Bytes) -> HttpConfigFn {
+    Box::new(move || HttpConfig {
+        random_subdomain: false,
+        domain: String::new(),
+        remote_port: 0,
+        subdomain: String::from_utf8_lossy(subdomain.as_ref()).to_string(),
+        random_remote_port: false,
+    })
+}
+
+fn remote_port_config(remote_port: u16) -> HttpConfigFn {
+    Box::new(move || HttpConfig {
+        remote_port: remote_port as i32,
+        random_subdomain: false,
+        domain: String::new(),
+        subdomain: String::new(),
+        random_remote_port: false,
+    })
+}
+
+fn random_subdomain_config() -> HttpConfigFn {
+    Box::new(move || HttpConfig {
+        random_subdomain: true,
+        domain: String::new(),
+        remote_port: 0,
+        subdomain: String::new(),
+        random_remote_port: false,
+    })
+}
+
+fn random_remote_port_config() -> HttpConfigFn {
+    Box::new(move || HttpConfig {
+        random_remote_port: true,
+        random_subdomain: false,
+        domain: String::new(),
+        remote_port: 0,
+        subdomain: String::new(),
+    })
 }
 
 impl<'a> Client<'a> {
@@ -69,6 +121,7 @@ impl<'a> Client<'a> {
                 r#type: Type::Tcp as i32,
                 config: Some(tunnel::Config::Tcp(TcpConfig {
                     remote_port: tcp_tunnel.remote_port as i32,
+                    random_remote_port: tcp_tunnel.random_remote_port,
                 })),
                 ..Default::default()
             };
@@ -85,6 +138,7 @@ impl<'a> Client<'a> {
                 r#type: Type::Udp as i32,
                 config: Some(tunnel::Config::Udp(UdpConfig {
                     remote_port: udp_tunnel.remote_port as i32,
+                    random_remote_port: udp_tunnel.random_remote_port,
                 })),
                 ..Default::default()
             };
@@ -96,16 +150,11 @@ impl<'a> Client<'a> {
         }
 
         for http_tunnel in self.http_tunnels.iter() {
+            let config_fn = &http_tunnel.config_fn;
             let tunnel = Tunnel {
                 name: http_tunnel.name.to_string(),
                 r#type: Type::Http as i32,
-                config: Some(tunnel::Config::Http(HttpConfig {
-                    remote_port: http_tunnel.remote_port as i32,
-                    subdomain: String::from_utf8_lossy(http_tunnel.subdomain.to_vec().as_slice())
-                        .to_string(),
-                    domain: String::from_utf8_lossy(http_tunnel.domain.to_vec().as_slice())
-                        .to_string(),
-                })),
+                config: Some(tunnel::Config::Http(config_fn())),
                 ..Default::default()
             };
             tasks.push(self.handle_tunnel(
@@ -124,22 +173,39 @@ impl<'a> Client<'a> {
         Ok(())
     }
 
-    pub fn add_tcp_tunnel(&mut self, name: String, local_endpoint: SocketAddr, remote_port: u16) {
+    pub fn add_tcp_tunnel(
+        &mut self,
+        name: String,
+        local_endpoint: SocketAddr,
+        remote_port: u16,
+        random_remote_port: bool,
+    ) {
         info!(
-            remote_port = remote_port,
+            name,
+            remote_port,
             local_endpoint = ?local_endpoint,
+            random_remote_port,
             "Registering TCP tunnel",
         );
         self.tcp_tunnels.push(TcpTunnel {
             name,
             remote_port,
             local_endpoint,
+            random_remote_port,
         });
     }
 
-    pub fn add_udp_tunnel(&mut self, name: String, local_endpoint: SocketAddr, remote_port: u16) {
+    pub fn add_udp_tunnel(
+        &mut self,
+        name: String,
+        local_endpoint: SocketAddr,
+        remote_port: u16,
+        random_remote_port: bool,
+    ) {
         info!(
-            remote_port = remote_port,
+            name,
+            remote_port,
+            random_remote_port,
             local_endpoint = ?local_endpoint,
             "Registering UDP tunnel"
         );
@@ -147,6 +213,7 @@ impl<'a> Client<'a> {
             name,
             remote_port,
             local_endpoint,
+            random_remote_port,
         });
     }
 
@@ -157,13 +224,24 @@ impl<'a> Client<'a> {
         remote_port: u16,
         subdomain: Bytes,
         domain: Bytes,
+        random_remote_port: bool,
     ) {
+        let config_fn = if !domain.is_empty() {
+            domain_config(domain)
+        } else if !subdomain.is_empty() {
+            subdomain_config(subdomain)
+        } else if remote_port != 0 {
+            remote_port_config(remote_port)
+        } else if random_remote_port {
+            random_remote_port_config()
+        } else {
+            random_subdomain_config()
+        };
+
         self.http_tunnels.push(HttpTunnel {
             name,
-            remote_port,
             local_endpoint,
-            subdomain,
-            domain,
+            config_fn,
         });
     }
 
