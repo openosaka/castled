@@ -15,7 +15,7 @@ build:
 
 .PHONY: run-server
 run-server: build
-	RUST_LOG=INFO ./target/debug/tunneld
+	RUST_LOG=INFO ./target/debug/tunneld --domain localhost --ip 127.0.0.1
 
 .PHONY: run-client
 run-client: build

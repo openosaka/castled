@@ -15,7 +15,6 @@ use tunneld_pkg::{event, util::create_tcp_listener};
 /// DataServer is responsible for handling the data transfer
 /// between user connection and Grpc Server(of Control Server).
 pub(crate) struct DataServer {
-    _domain: String,
     // tunneld provides a vhttp server for responding requests to the tunnel
     // which is used different subdomains or domains, they still use the same port.
     http_tunnel: Http,
@@ -23,10 +22,9 @@ pub(crate) struct DataServer {
 }
 
 impl DataServer {
-    pub(crate) fn new(vhttp_port: u16, domain: String) -> Self {
+    pub(crate) fn new(vhttp_port: u16) -> Self {
         let http_registry = DynamicRegistry::new();
         Self {
-            _domain: domain,
             http_registry: http_registry.clone(),
             http_tunnel: Http::new(vhttp_port, Arc::new(Box::new(http_registry))),
         }
