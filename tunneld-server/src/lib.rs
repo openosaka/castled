@@ -30,12 +30,18 @@ impl Default for Config {
         Config {
             control_port: 6610,
             vhttp_port: 6611,
-            entrypoint: EntrypointConfig {
-                domain: Vec::new(),
-                ip: Vec::new(),
-                vhttp_behind_proxy_tls: false,
-                port_range: 1024..=65535,
-            },
+            entrypoint: Default::default(),
+        }
+    }
+}
+
+impl Default for EntrypointConfig {
+    fn default() -> Self {
+        Self {
+            domain: Vec::new(),
+            ip: Vec::new(),
+            vhttp_behind_proxy_tls: false,
+            port_range: 1024..=65535,
         }
     }
 }

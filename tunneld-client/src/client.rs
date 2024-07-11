@@ -46,10 +46,10 @@ struct UdpTunnel {
 struct HttpTunnel {
     name: String,
     local_endpoint: SocketAddr,
-    config_fn: Box<dyn Fn() -> HttpConfig>,
+    config_fn: HttpConfigFn,
 }
 
-type HttpConfigFn = Box<dyn Fn() -> HttpConfig>;
+type HttpConfigFn = Box<dyn Fn() -> HttpConfig + Send + Sync>;
 
 fn domain_config(domain: Bytes) -> HttpConfigFn {
     Box::new(move || HttpConfig {

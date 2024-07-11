@@ -94,7 +94,6 @@ impl Server {
     ///     let server = tunneld_server::Server::new(tunneld_server::Config{
     ///         control_port: 8610,
     ///         vhttp_port: 8611,
-    ///         domain: vec!["example.com".to_string()],
     ///         ..Default::default()
     ///     });
     ///     let shutdown = tokio::signal::ctrl_c();
@@ -463,9 +462,10 @@ mod tests {
         let server = Server::new(crate::Config {
             control_port: 8610,
             vhttp_port: 8611,
-            domain: vec!["example.com".to_string()],
-            ip: vec![],
-            vhttp_behind_proxy_tls: false,
+            entrypoint: crate::EntrypointConfig {
+                domain: vec!["example.com".to_string()],
+                ..Default::default()
+            },
         });
         let cancel_w = CancellationToken::new();
         let cancel = cancel_w.clone();

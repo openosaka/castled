@@ -147,6 +147,7 @@ async fn register_http_tunnel_with_subdomain() {
             0,
             Bytes::from("foo"),
             Bytes::from(""),
+            false,
         );
 
         let client_exit = client

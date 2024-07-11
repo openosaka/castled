@@ -5,7 +5,7 @@ use crate::tunnel::{
     udp::Udp,
 };
 use bytes::Bytes;
-use std::{sync::Arc, vec};
+use std::sync::Arc;
 use tokio::{
     net::{TcpListener, UdpSocket},
     spawn,
@@ -13,7 +13,7 @@ use tokio::{
 };
 use tonic::Status;
 use tracing::info;
-use tunneld_pkg::event;
+use tunneld_pkg::event::{self, Payload};
 use tunneld_pkg::{event::ClientEventResponse, shutdown::ShutdownListener};
 
 /// DataServer is responsible for handling the data transfer
@@ -115,6 +115,7 @@ impl DataServer {
                 } => {
                     let subdomain_c = subdomain.clone();
                     let domain_c = domain.clone();
+                    let domain_c2 = domain.clone();
                     let resp_status = this
                         .register_http(
                             domain,
@@ -134,6 +135,19 @@ impl DataServer {
                     } else {
                         // means register successfully
                         // listen the close_listener to cancel the unregister domain/subdomain.
+                        let payload = Payload::RegisterHttp {
+                            port,
+                            subdomain,
+                            domain: domain_c2,
+                            random_subdomain,
+                        };
+                        event
+                            .resp
+                            .send(ClientEventResponse::registered(
+                                this.entrypoint_config.make_entrypoint(&payload, port),
+                            ))
+                            .unwrap();
+
                         tokio::spawn(async move {
                             event.close_listener.cancelled().await;
                             if !subdomain_c.is_empty() {
@@ -143,10 +157,6 @@ impl DataServer {
                                 this.http_registry.unregister_domain(domain_c);
                             }
                         });
-                        event
-                            .resp
-                            .send(ClientEventResponse::registered(vec![]))
-                            .unwrap();
                     }
                 }
             }
@@ -214,11 +224,12 @@ impl DataServer {
             let result =
                 create_socket::<Tcp>(*port, self.entrypoint_config.port_range.clone()).await;
             match result {
-                Ok((port, listener)) => {
+                Ok((random_port, listener)) => {
+                    *port = random_port;
                     let conn_event_chan = conn_event_chan.clone();
                     spawn(async move {
                         Http::new(
-                            port,
+                            random_port,
                             Arc::new(Box::new(FixedRegistry::new(conn_event_chan))),
                         )
                         .serve_with_listener(listener, shutdown);
