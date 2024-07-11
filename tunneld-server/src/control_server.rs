@@ -230,6 +230,7 @@ impl TunnelService for ControlHandler {
                             port: http.remote_port as u16,
                             subdomain: Bytes::from(http.subdomain.to_owned()),
                             domain: Bytes::from(http.domain.to_owned()),
+                            random_subdomain: http.random_subdomain,
                         },
                         close_listener: register_cancel.clone(),
                         incoming_events: user_incoming_tx,

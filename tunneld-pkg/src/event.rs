@@ -61,6 +61,7 @@ pub enum Payload {
         port: u16,
         subdomain: Bytes,
         domain: Bytes,
+        random_subdomain: bool,
     },
 }
 

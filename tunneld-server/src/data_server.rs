@@ -108,17 +108,19 @@ impl DataServer {
                     }
                 }
                 event::Payload::RegisterHttp {
-                    port,
-                    subdomain,
+                    mut port,
+                    mut subdomain,
                     domain,
+                    random_subdomain,
                 } => {
                     let subdomain_c = subdomain.clone();
                     let domain_c = domain.clone();
                     let resp_status = this
                         .register_http(
-                            port,
-                            subdomain,
                             domain,
+                            &mut subdomain,
+                            random_subdomain,
+                            &mut port,
                             event.incoming_events,
                             ShutdownListener::from_cancellation(event.close_listener.clone()),
                         )
@@ -156,48 +158,87 @@ impl DataServer {
 
     async fn register_http(
         &self,
-        port: u16,
-        subdomain: Bytes,
         domain: Bytes,
+        subdomain: &mut Bytes,
+        random_subdomain: bool,
+        port: &mut u16,
         conn_event_chan: mpsc::Sender<event::UserIncoming>,
         shutdown: ShutdownListener,
     ) -> Option<Status> {
-        if port == 0 && subdomain.is_empty() && domain.is_empty() {
-            return Some(Status::invalid_argument("invalid http tunnel arguments"));
-        }
-
-        if !subdomain.is_empty() {
-            // forward the http request from this subdomain to control server.
-            if self.http_registry.subdomain_registered(subdomain.clone()) {
-                return Some(Status::already_exists("subdomain already registered"));
-            }
-
-            self.http_registry
-                .register_subdomain(subdomain, conn_event_chan);
-            return None;
-        }
         if !domain.is_empty() {
             // forward the http request from this domain to control server.
-            if self.http_registry.domain_registered(domain.clone()) {
+            if self.http_registry.domain_registered(&domain) {
                 return Some(Status::already_exists("domain already registered"));
             }
             self.http_registry
                 .register_domain(domain, conn_event_chan.clone());
             return None;
         }
-        if port != 0 {
+
+        if subdomain.is_empty() && random_subdomain {
+            loop {
+                let subdomain2 = Bytes::from(generate_random_subdomain(8));
+                if !self.http_registry.subdomain_registered(&subdomain2) {
+                    *subdomain = subdomain2;
+                    break;
+                }
+            }
+        }
+
+        // let subdomain = subdomain_cell.into_inner();
+        if !subdomain.is_empty() {
+            // forward the http request from this subdomain to control server.
+            if self.http_registry.subdomain_registered(subdomain) {
+                return Some(Status::already_exists("subdomain already registered"));
+            }
+
+            info!("subdomain registered: {:?}", subdomain);
+            self.http_registry
+                .register_subdomain(subdomain.clone(), conn_event_chan);
+            return None;
+        }
+
+        if *port != 0 {
             if let Err(err) = Http::new(
-                port,
+                *port,
                 Arc::new(Box::new(FixedRegistry::new(conn_event_chan))),
             )
             .serve(shutdown)
             .await
             {
-                return Some(Status::internal(err.to_string()));
-            };
-            return None;
+                Some(Status::internal(err.to_string()))
+            } else {
+                None
+            }
+        } else {
+            let result =
+                create_socket::<Tcp>(*port, self.entrypoint_config.port_range.clone()).await;
+            match result {
+                Ok((port, listener)) => {
+                    let conn_event_chan = conn_event_chan.clone();
+                    spawn(async move {
+                        Http::new(
+                            port,
+                            Arc::new(Box::new(FixedRegistry::new(conn_event_chan))),
+                        )
+                        .serve_with_listener(listener, shutdown);
+                    });
+                    None
+                }
+                Err(err) => Some(err),
+            }
         }
-
-        Some(Status::invalid_argument("invalid http tunnel arguments"))
     }
+}
+
+fn generate_random_subdomain(length: usize) -> String {
+    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = fastrand::Rng::new();
+    let subdomain: String = (0..length)
+        .map(|_| {
+            let idx = rng.u8(..CHARSET.len() as u8) as usize;
+            CHARSET[idx] as char
+        })
+        .collect();
+    subdomain
 }
