@@ -11,7 +11,7 @@ use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
 use tracing::{error, info};
-use tunneld_pkg::bridge::{self, BridgeData};
+use tunneld_pkg::bridge;
 use tunneld_pkg::event;
 use tunneld_pkg::io::CancellableReceiver;
 use tunneld_pkg::shutdown::{self, ShutdownListener};
@@ -280,7 +280,7 @@ impl TunnelService for ControlHandler {
                         match connection {
                             event::UserIncoming::Add(bridge) => {
                                 let bridge_id = String::from_utf8_lossy(bridge.id.to_vec().as_slice()).to_string();
-                                info!(bridge_id = ?bridge_id, "new user connection");
+                                info!(bridge_id = bridge_id, "new user connection");
                                 bridges.insert(bridge.id, bridge.inner);
                                 outbound_streaming_tx
                                     .send(Ok(Control {
@@ -294,7 +294,7 @@ impl TunnelService for ControlHandler {
                             event::UserIncoming::Remove(bridge_id) => {
                                 {
                                     let bridge_id = String::from_utf8_lossy(bridge_id.to_vec().as_slice()).to_string();
-                                    info!(bridge_id = ?bridge_id, "remove user connection");
+                                    info!(bridge_id = bridge_id, "remove user connection");
                                 }
                                 bridges.remove(&bridge_id);
                                 close_sender_notifiers.remove(&bridge_id).unwrap().1.cancel();
@@ -336,19 +336,19 @@ impl TunnelService for ControlHandler {
                     Some(traffic) = inbound_stream.next() => {
                         match traffic {
                             Ok(traffic) => {
-                                let connection_id_str = traffic.connection_id;
-                                let connection_id = Bytes::copy_from_slice(connection_id_str.as_bytes());
-                                let connection = bridges
-                                    .get(&connection_id)
+                                let bridge_id_str = traffic.connection_id;
+                                let bridge_id = Bytes::copy_from_slice(bridge_id_str.as_bytes());
+                                let bridge = bridges
+                                    .get(&bridge_id)
                                     .context("connection not found")
                                     .unwrap();
-                                let connection = connection.value();
+                                let bridge = bridge.value();
 
                                 match traffic_to_server::Action::try_from(traffic.action) {
                                     Ok(traffic_to_server::Action::Start) => {
                                         info!(
-                                            "received start action from connection {}, I am gonna start streaming",
-                                            connection_id_str,
+                                            bridge_id = bridge_id_str,
+                                            "received start action, I am gonna start streaming",
                                         );
                                         if stream_started {
                                             error!("duplicate start action");
@@ -358,13 +358,11 @@ impl TunnelService for ControlHandler {
 
                                         let close_sender = CancellationToken::new();
                                         let close_sender_listener = close_sender.clone();
-                                        close_sender_notifiers.insert(connection_id, close_sender);
+                                        close_sender_notifiers.insert(bridge_id, close_sender);
 
                                         // we read data from transfer_rx, then forward the data to outbound_tx
                                         let (transfer_tx, mut transfer_rx) = mpsc::channel(256);
-                                        connection
-                                            .chan
-                                            .send(BridgeData::Sender(transfer_tx))
+                                        bridge.send_sender(transfer_tx)
                                             .await
                                             .context("failed to send streaming_tx to data_sender_sender")
                                             .unwrap();
@@ -395,32 +393,28 @@ impl TunnelService for ControlHandler {
                                     }
                                     Ok(traffic_to_server::Action::Sending) => {
                                         info!(
-                                            "client is sending traffic, connection_id: {}",
-                                            connection_id_str
+                                            bridge_id = bridge_id_str,
+                                            "client is sending traffic",
                                         );
                                         // client -> server
-                                        connection
-                                            .chan
-                                            .send(BridgeData::Data(traffic.data))
-                                            .await
-                                            .unwrap();
+                                        bridge.send_data(traffic.data).await.unwrap();
                                     }
                                     Ok(traffic_to_server::Action::Finished) => {
                                         info!(
-                                            "client finished sending traffic, connection_id: {}",
-                                            connection_id_str
+                                            bridge_id = bridge_id_str,
+                                            "client finished sending traffic",
                                         );
-                                        connection.chan.send(BridgeData::Data(vec![])).await.unwrap();
+                                        bridge.send_data(vec![]).await.unwrap();
                                         return; // close the data streaming
                                     }
                                     Ok(traffic_to_server::Action::Close) => {
-                                        info!("client closed streaming, connection_id: {}", connection_id_str);
-                                        connection.cancel.cancel();
+                                        info!(bridge_id = bridge_id_str, "client closed streaming");
+                                        bridge.close();
                                         return; // close the data streaming
                                     }
                                     Err(_) => {
                                         error!("invalid traffic action: {}", traffic.action);
-                                        connection.cancel.cancel();
+                                        bridge.close();
                                     }
                                 }
                             }

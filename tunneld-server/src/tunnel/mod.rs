@@ -3,7 +3,7 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tunneld_pkg::{
-    bridge::{self},
+    bridge::{self, DataSenderBridge, IdDataSenderBridge},
     event,
 };
 use uuid::Uuid;
@@ -33,12 +33,9 @@ pub(crate) async fn init_data_sender_bridge(
     let client_cancel = CancellationToken::new();
     let client_cancel_receiver = client_cancel.clone();
 
-    let event = bridge::IdDataSenderBridge {
+    let event = IdDataSenderBridge {
         id: bridge_id.clone(),
-        inner: bridge::DataSenderBridge {
-            chan: bridge_chan.clone(),
-            cancel: client_cancel,
-        },
+        inner: DataSenderBridge::new(bridge_chan.clone(), client_cancel),
     };
     user_incoming_chan
         .send(event::UserIncoming::Add(event))

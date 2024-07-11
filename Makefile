@@ -15,7 +15,7 @@ build:
 
 .PHONY: run-server
 run-server: build
-	RUST_LOG=debug ./target/debug/tunneld
+	RUST_LOG=INFO ./target/debug/tunneld
 
 .PHONY: run-client
 run-client: build

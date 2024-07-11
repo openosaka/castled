@@ -14,10 +14,35 @@ pub struct IdDataSenderBridge {
 /// then the control server uses the `chan` to send data to data server.
 pub struct DataSenderBridge {
     /// BridgeChan is used for sending data to data server.
-    pub chan: DataSender,
+    chan: DataSender,
     /// when the server receives [`tunneld_protocol::pb::traffic_to_server::Action::Close`] action from [`tunneld_protocol::pb::tunnel_service_server::TunnelService::data`] streaming,
-    /// the server will cancel the connection.
-    pub cancel: CancellationToken,
+    /// the server will cancel the bridge.
+    cancel: CancellationToken,
+}
+
+impl DataSenderBridge {
+    /// new creates a new DataSenderBridge.
+    pub fn new(chan: DataSender, cancel: CancellationToken) -> Self {
+        Self { chan, cancel }
+    }
+
+    /// send sends data to data server.
+    pub async fn send_data(&self, data: Vec<u8>) -> Result<(), mpsc::error::SendError<BridgeData>> {
+        self.chan.send(BridgeData::Data(data)).await
+    }
+
+    /// send_sender sends sender to data server.
+    pub async fn send_sender(
+        &self,
+        sender: mpsc::Sender<Vec<u8>>,
+    ) -> Result<(), mpsc::error::SendError<BridgeData>> {
+        self.chan.send(BridgeData::Sender(sender)).await
+    }
+
+    /// close closes the bridge.
+    pub fn close(&self) {
+        self.cancel.cancel();
+    }
 }
 
 /// DataSender is the sender holden by control server to send data to data server.
