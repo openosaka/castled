@@ -2,10 +2,13 @@ use std::sync::Arc;
 
 use tokio::{net::UdpSocket, select, sync::mpsc};
 use tokio_util::sync::CancellationToken;
+use tonic::Status;
 use tracing::{error, warn};
-use tunneld_pkg::{bridge::BridgeData, event};
+use tunneld_pkg::{bridge::BridgeData, event, util::create_udp_socket};
 
 use crate::tunnel::BridgeResult;
+
+use super::SocketCreator;
 
 const MAX_DATAGRAM_SIZE: usize = 65507;
 
@@ -103,5 +106,13 @@ impl Udp {
                 }
             }
         }
+    }
+}
+
+impl SocketCreator for Udp {
+    type Output = UdpSocket;
+
+    async fn create_socket(port: u16) -> anyhow::Result<UdpSocket, Status> {
+        create_udp_socket(port).await
     }
 }

@@ -30,6 +30,14 @@ struct Args {
     /// If the vhttp server is behind a http proxy like nginx, set this to true.
     #[arg(long, default_value = "false")]
     vhttp_behind_proxy_tls: bool,
+
+    /// Minimum accepted port number.
+    #[clap(long, default_value_t = 1024)]
+    random_min_port: u16,
+
+    /// Maximum accepted port number.
+    #[clap(long, default_value_t = 65535)]
+    random_max_port: u16,
 }
 
 #[tokio::main]
@@ -56,9 +64,12 @@ async fn main() {
     let server = Server::new(Config {
         control_port: args.control_port,
         vhttp_port: args.vhttp_port,
-        domain: args.domain,
-        ip: args.ip,
-        vhttp_behind_proxy_tls: args.vhttp_behind_proxy_tls,
+        entrypoint: tunneld_server::EntrypointConfig {
+            domain: args.domain,
+            ip: args.ip,
+            vhttp_behind_proxy_tls: args.vhttp_behind_proxy_tls,
+            port_range: args.random_min_port..=args.random_max_port,
+        },
     });
     if let Err(err) = server.run(cancel.cancelled()).await {
         eprintln!("server error: {:?}", err);

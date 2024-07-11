@@ -20,16 +20,15 @@ enum Commands {
     Tcp {
         #[clap(index = 1)]
         port: u16,
-        #[arg(long, required = true)]
+        /// remote port the client will forward the traffic to the local port.
+        #[arg(long, required = false, default_value_t = 0)]
         remote_port: u16,
         #[arg(
             long,
             default_value = "127.0.0.1",
-            help = "Local address to bind to, e.g localhost, example.com"
+            help = "Local address to bind to, e.g localhost, 127.0.0.1"
         )]
         local_addr: String,
-        #[arg(long, default_value = "false")]
-        random_remote_port: bool,
     },
     Http {
         #[clap(index = 1)]
@@ -43,25 +42,23 @@ enum Commands {
         #[arg(
             long,
             default_value = "127.0.0.1",
-            help = "Local address to bind to, e.g localhost, example.com"
+            help = "Local address to bind to, e.g localhost, 127.0.0.1"
         )]
         local_addr: String,
-        #[arg(long, default_value = "false")]
-        random_remote_port: bool,
+        #[arg(long)]
+        random_subdomain: bool,
     },
     Udp {
         #[clap(index = 1)]
         port: u16,
-        #[arg(long, required = true)]
+        #[arg(long, required = false, default_value_t = 0)]
         remote_port: u16,
         #[arg(
             long,
             default_value = "127.0.0.1",
-            help = "Local address to bind to, e.g localhost, example.com"
+            help = "Local address to bind to, e.g localhost, 127.0.0.1"
         )]
         local_addr: String,
-        #[arg(long, default_value = "false")]
-        random_remote_port: bool,
     },
 }
 
@@ -94,29 +91,17 @@ async fn main() -> anyhow::Result<()> {
             port,
             remote_port,
             local_addr,
-            random_remote_port,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            client.add_tcp_tunnel(
-                TUNNEL_NAME.to_string(),
-                local_endpoint,
-                remote_port,
-                random_remote_port,
-            );
+            client.add_tcp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port);
         }
         Commands::Udp {
             port,
             remote_port,
             local_addr,
-            random_remote_port,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            client.add_udp_tunnel(
-                TUNNEL_NAME.to_string(),
-                local_endpoint,
-                remote_port,
-                random_remote_port,
-            );
+            client.add_udp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port);
         }
         Commands::Http {
             port,
@@ -124,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
             remote_port,
             subdomain,
             domain,
-            random_remote_port,
+            random_subdomain,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
             client.add_http_tunnel(
@@ -133,7 +118,7 @@ async fn main() -> anyhow::Result<()> {
                 remote_port.unwrap_or(0),
                 Bytes::from(subdomain.unwrap_or_default()),
                 Bytes::from(domain.unwrap_or_default()),
-                random_remote_port,
+                random_subdomain,
             );
         }
     }

@@ -1,16 +1,20 @@
 use crate::tunnel::{
+    create_socket,
     http::{DynamicRegistry, FixedRegistry, Http},
     tcp::Tcp,
     udp::Udp,
 };
 use bytes::Bytes;
-use std::sync::Arc;
-use tokio::{spawn, sync::mpsc};
+use std::{sync::Arc, vec};
+use tokio::{
+    net::{TcpListener, UdpSocket},
+    spawn,
+    sync::mpsc,
+};
 use tonic::Status;
 use tracing::info;
-use tunneld_pkg::shutdown::ShutdownListener;
-use tunneld_pkg::util::create_udp_listener;
-use tunneld_pkg::{event, util::create_tcp_listener};
+use tunneld_pkg::event;
+use tunneld_pkg::{event::ClientEventResponse, shutdown::ShutdownListener};
 
 /// DataServer is responsible for handling the data transfer
 /// between user connection and Grpc Server(of Control Server).
@@ -19,14 +23,16 @@ pub(crate) struct DataServer {
     // which is used different subdomains or domains, they still use the same port.
     http_tunnel: Http,
     http_registry: DynamicRegistry,
+    entrypoint_config: crate::EntrypointConfig,
 }
 
 impl DataServer {
-    pub(crate) fn new(vhttp_port: u16) -> Self {
+    pub(crate) fn new(vhttp_port: u16, entrypoint_config: crate::EntrypointConfig) -> Self {
         let http_registry = DynamicRegistry::new();
         Self {
             http_registry: http_registry.clone(),
             http_tunnel: Http::new(vhttp_port, Arc::new(Box::new(http_registry))),
+            entrypoint_config,
         }
     }
 
@@ -43,38 +49,64 @@ impl DataServer {
 
         while let Some(event) = receiver.recv().await {
             match event.payload {
-                event::Payload::RegisterTcp { port } => match create_tcp_listener(port).await {
-                    Ok(listener) => {
-                        let cancel = event.close_listener;
-                        let conn_event_chan = event.incoming_events;
-                        spawn(async move {
-                            Tcp::new(listener, conn_event_chan.clone())
-                                .serve(cancel)
-                                .await;
-                            info!("tcp listener on {} closed", port);
-                        });
-                        event.resp.send(None).unwrap(); // success
+                event::Payload::RegisterTcp { port } => {
+                    let result: Result<(u16, TcpListener), tonic::Status> =
+                        create_socket::<Tcp>(port, this.entrypoint_config.port_range.clone()).await;
+                    match result {
+                        Ok((port, listener)) => {
+                            let cancel = event.close_listener;
+                            let conn_event_chan = event.incoming_events;
+                            spawn(async move {
+                                Tcp::new(listener, conn_event_chan.clone())
+                                    .serve(cancel)
+                                    .await;
+                                info!("tcp listener on {} closed", port);
+                            });
+                            event
+                                .resp
+                                .send(ClientEventResponse::registered(
+                                    this.entrypoint_config.make_entrypoint(&event.payload, port),
+                                ))
+                                .unwrap(); // success
+                        }
+                        Err(status) => {
+                            event
+                                .resp
+                                .send(ClientEventResponse::registered_failed(status))
+                                .unwrap();
+                        }
                     }
-                    Err(status) => {
-                        event.resp.send(Some(status)).unwrap();
+                }
+                event::Payload::RegisterUdp { port } => {
+                    let result: Result<(u16, UdpSocket), tonic::Status> =
+                        create_socket::<Udp>(port, this.entrypoint_config.port_range.clone()).await;
+
+                    match result {
+                        Ok((port, socket)) => {
+                            let socket = socket;
+                            let cancel = event.close_listener;
+                            let conn_event_chan = event.incoming_events;
+                            spawn(async move {
+                                Udp::new(socket, conn_event_chan.clone())
+                                    .serve(cancel)
+                                    .await;
+                                info!("udp socket on {} closed", port);
+                            });
+                            event
+                                .resp
+                                .send(ClientEventResponse::registered(
+                                    this.entrypoint_config.make_entrypoint(&event.payload, port),
+                                ))
+                                .unwrap(); // success
+                        }
+                        Err(status) => {
+                            event
+                                .resp
+                                .send(ClientEventResponse::registered_failed(status))
+                                .unwrap();
+                        }
                     }
-                },
-                event::Payload::RegisterUdp { port } => match create_udp_listener(port).await {
-                    Ok(listener) => {
-                        let cancel = event.close_listener;
-                        let conn_event_chan = event.incoming_events;
-                        spawn(async move {
-                            Udp::new(listener, conn_event_chan.clone())
-                                .serve(cancel)
-                                .await;
-                            info!("udp listener on {} closed", port);
-                        });
-                        event.resp.send(None).unwrap(); // success
-                    }
-                    Err(status) => {
-                        event.resp.send(Some(status)).unwrap();
-                    }
-                },
+                }
                 event::Payload::RegisterHttp {
                     port,
                     subdomain,
@@ -92,7 +124,12 @@ impl DataServer {
                         )
                         .await;
                     let this = Arc::clone(&this);
-                    if resp_status.is_none() {
+                    if let Some(status) = resp_status {
+                        event
+                            .resp
+                            .send(ClientEventResponse::registered_failed(status))
+                            .unwrap();
+                    } else {
                         // means register successfully
                         // listen the close_listener to cancel the unregister domain/subdomain.
                         tokio::spawn(async move {
@@ -104,8 +141,11 @@ impl DataServer {
                                 this.http_registry.unregister_domain(domain_c);
                             }
                         });
+                        event
+                            .resp
+                            .send(ClientEventResponse::registered(vec![]))
+                            .unwrap();
                     }
-                    event.resp.send(resp_status).unwrap();
                 }
             }
         }

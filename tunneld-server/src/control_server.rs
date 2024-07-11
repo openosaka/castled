@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
 use tracing::{error, info};
 use tunneld_pkg::bridge;
-use tunneld_pkg::event;
+use tunneld_pkg::event::{self, ClientEventResponse};
 use tunneld_pkg::io::CancellableReceiver;
 use tunneld_pkg::shutdown::{self, ShutdownListener};
 use tunneld_protocol::pb::{
@@ -42,8 +42,11 @@ type DataStream = Pin<Box<dyn Stream<Item = GrpcResult<TrafficToClient>> + Send>
 /// the most of work is to forward the data from client to data server.
 /// We can understand this is a tunnel between the client and the data server.
 pub struct Server {
-    /// config is the configuration of the server.
-    config: Config,
+    /// config is the tcp port of the control server.
+    control_port: u16,
+
+    /// control server will give the event to the data server.
+    event_rx: mpsc::Receiver<event::ClientEvent>,
 
     /// control_server is the grpc server instance.
     control_server: GrpcServer,
@@ -55,21 +58,30 @@ pub struct Server {
     /// when the shutdown signal is received, shutdown the server
     /// by [`tunneld_pkg::shutdown::Shutdown::notify`].
     shutdown: shutdown::Shutdown,
+
+    /// handler is the grpc handler of the control server.
+    handler: ControlHandler,
 }
 
 impl Server {
     /// Create a new server instance.
     pub fn new(config: Config) -> Self {
+        let shutdown = shutdown::Shutdown::new();
+        let (event_tx, event_rx) = mpsc::channel(1024);
+
         let server = GrpcServer::builder()
             .http2_keepalive_interval(Some(tokio::time::Duration::from_secs(60)))
             .http2_keepalive_timeout(Some(tokio::time::Duration::from_secs(3)));
-        let events = DataServer::new(config.vhttp_port);
+        let events = DataServer::new(config.vhttp_port, config.entrypoint);
+        let handler = ControlHandler::new(shutdown.listen(), event_tx);
 
         Self {
-            config,
+            control_port: config.control_port,
             control_server: server,
             event_bus: events,
-            shutdown: shutdown::Shutdown::new(),
+            shutdown,
+            handler,
+            event_rx,
         }
     }
 
@@ -90,23 +102,20 @@ impl Server {
     /// }
     /// ```
     pub async fn run(self, shutdown: impl Future) -> anyhow::Result<()> {
-        let addr = format!("0.0.0.0:{}", self.config.control_port)
+        let addr = format!("0.0.0.0:{}", self.control_port)
             .to_socket_addrs()
             .context("parse control port")?
             .next()
             .context("invalid control_port")
             .unwrap();
 
-        let (event_tx, event_rx) = mpsc::channel(1024);
-
         let shutdown_listener_control_server = self.shutdown.listen();
         let shutdown_listener_event_bus = self.shutdown.listen();
 
-        let handler = ControlHandler::new(self.config, self.shutdown.listen(), event_tx);
         let event_bus = self.event_bus;
         tokio::spawn(async move {
             event_bus
-                .listen(shutdown_listener_event_bus, event_rx)
+                .listen(shutdown_listener_event_bus, self.event_rx)
                 .await
         });
 
@@ -115,7 +124,7 @@ impl Server {
         let mut control_server = self.control_server;
         let run_control_server = async move {
             control_server
-                .add_service(TunnelServiceServer::new(handler))
+                .add_service(TunnelServiceServer::new(self.handler))
                 .serve_with_shutdown(addr, shutdown_listener_control_server)
                 .await
         };
@@ -141,7 +150,6 @@ impl Server {
 /// ControlHeader is the core of the control server,
 /// it implements the grpc TunnelService.
 struct ControlHandler {
-    config: Config,
     event_tx: mpsc::Sender<event::ClientEvent>,
     bridges: Arc<DashMap<Bytes, bridge::DataSenderBridge>>,
     close_sender_notifiers: Arc<DashMap<Bytes, CancellationToken>>,
@@ -149,13 +157,8 @@ struct ControlHandler {
 }
 
 impl ControlHandler {
-    fn new(
-        config: Config,
-        shutdown: ShutdownListener,
-        event_tx: mpsc::Sender<event::ClientEvent>,
-    ) -> Self {
+    fn new(shutdown: ShutdownListener, event_tx: mpsc::Sender<event::ClientEvent>) -> Self {
         Self {
-            config,
             bridges: Arc::new(DashMap::new()),
             close_sender_notifiers: Arc::new(DashMap::new()),
             event_tx,
@@ -175,26 +178,23 @@ impl TunnelService for ControlHandler {
         }
 
         let (outbound_streaming_tx, outbound_streaming_rx) = mpsc::channel(256);
-        let tenant_id = Uuid::new_v4();
-        let init_command = Control {
-            command: Command::Init as i32,
-            payload: Some(Payload::Init(InitPayload {
-                tunnel_id: tenant_id.to_string(),
-                assigned_entrypoint: self
-                    .config
-                    .make_entrypoint(&req)
-                    .into_iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            })),
-        };
-        outbound_streaming_tx
-            .send(Ok(init_command))
-            .await
-            .map_err(|err| {
-                error!(err = ?err, "failed to send control stream");
-                Status::internal("failed to send control stream")
-            })?;
+        let outbound_streaming_tx_init_message = outbound_streaming_tx.clone();
+        let (entrypoint_tx, entrypoint_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            // wait for the entrypoint assigned by the server
+            let tenant_id = Uuid::new_v4();
+            let init_command = Control {
+                command: Command::Init as i32,
+                payload: Some(Payload::Init(InitPayload {
+                    tunnel_id: tenant_id.to_string(),
+                    assigned_entrypoint: entrypoint_rx.await.unwrap(),
+                })),
+            };
+            outbound_streaming_tx_init_message
+                .send(Ok(init_command))
+                .await
+                .unwrap();
+        });
 
         let register_cancel = CancellationToken::new();
         let event_tx = self.event_tx.clone();
@@ -208,11 +208,10 @@ impl TunnelService for ControlHandler {
                     remote_port = tcp.remote_port,
                     "registering tcp tunnel on remote_port"
                 );
-                let remote_port = tcp.remote_port.to_owned();
                 event_tx
                     .send(event::ClientEvent {
                         payload: event::Payload::RegisterTcp {
-                            port: remote_port as u16,
+                            port: tcp.remote_port as u16,
                         },
                         close_listener: register_cancel.clone(),
                         incoming_events: user_incoming_tx,
@@ -261,10 +260,14 @@ impl TunnelService for ControlHandler {
         }
 
         match resp_rx.await {
-            Ok(None) => {}
-            Ok(Some(status)) => {
-                outbound_streaming_tx.send(Err(status)).await.unwrap();
-            }
+            Ok(ClientEventResponse::Registered { status, entrypoint }) => match status {
+                None => {
+                    entrypoint_tx.send(entrypoint).unwrap();
+                }
+                Some(status) => {
+                    outbound_streaming_tx.send(Err(status)).await.unwrap();
+                }
+            },
             Err(err) => {
                 error!(err = ?err, "failed to send response to client, the connection may be closed");
                 if let Err(err) = outbound_streaming_tx

@@ -123,19 +123,18 @@ message HTTPConfig {
   // if random_subdomain is true, the server will assign a random subdomain.
   bool random_subdomain = 3;
 
+  // random_port is the lowest priority option, the server will assign a random port
+  // if the remote_port is empty.
   // the server will listen on the remote_port to accept the http request.
   int32 remote_port = 4;
-
-  // if random_remote_port is true, the server will assign a random remote port.
-  bool random_remote_port = 5;
 }
 
 message TCPConfig { 
+  // if remote_port is empty, the server will assign a random port.
   int32 remote_port = 1;
-  bool random_remote_port = 2;
 }
 
 message UDPConfig {
+  // if remote_port is empty, the server will assign a random port.
   int32 remote_port = 1; 
-  bool random_remote_port = 2;
 }

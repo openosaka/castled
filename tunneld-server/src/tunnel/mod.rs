@@ -1,7 +1,10 @@
+use std::ops::RangeInclusive;
+
 use anyhow::Context as _;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tonic::Status;
 use tunneld_pkg::{
     bridge::{self, DataSenderBridge, IdDataSenderBridge},
     event,
@@ -71,4 +74,32 @@ pub(crate) async fn init_data_sender_bridge(
         client_cancel_receiver,
         remove_bridge_sender,
     })
+}
+
+pub(crate) trait SocketCreator {
+    type Output;
+
+    async fn create_socket(port: u16) -> anyhow::Result<Self::Output, Status>;
+}
+
+pub(crate) async fn create_socket<T: SocketCreator>(
+    port: u16,
+    free_port_range: RangeInclusive<u16>,
+) -> anyhow::Result<(u16, T::Output), Status> {
+    if port > 0 {
+        let socket = T::create_socket(port).await?;
+        Ok((port, socket))
+    } else {
+        // refer: https://github.com/ekzhang/bore/blob/v0.5.1/src/server.rs#L88
+        // todo: a better way to find a free port
+        for _ in 0..150 {
+            let freeport = fastrand::u16(free_port_range.clone());
+            let result = T::create_socket(freeport).await;
+            if result.is_err() {
+                continue;
+            }
+            return Ok((freeport, result.unwrap()));
+        }
+        Err(Status::internal("failed to find a free port"))
+    }
 }
