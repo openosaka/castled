@@ -1,4 +1,5 @@
 use crate::data_server::DataServer;
+use crate::Config;
 use anyhow::Context as _;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -41,10 +42,8 @@ type DataStream = Pin<Box<dyn Stream<Item = GrpcResult<TrafficToClient>> + Send>
 /// the most of work is to forward the data from client to data server.
 /// We can understand this is a tunnel between the client and the data server.
 pub struct Server {
-    /// control_port is the port of the control server.
-    ///
-    /// the client will connect to this port to register a tunnel.
-    control_port: u16,
+    /// config is the configuration of the server.
+    config: Config,
 
     /// control_server is the grpc server instance.
     control_server: GrpcServer,
@@ -60,14 +59,14 @@ pub struct Server {
 
 impl Server {
     /// Create a new server instance.
-    pub fn new(control_port: u16, vhttp_port: u16, domain: String) -> Self {
+    pub fn new(config: Config) -> Self {
         let server = GrpcServer::builder()
             .http2_keepalive_interval(Some(tokio::time::Duration::from_secs(60)))
             .http2_keepalive_timeout(Some(tokio::time::Duration::from_secs(3)));
-        let events = DataServer::new(vhttp_port, domain);
+        let events = DataServer::new(config.vhttp_port);
 
         Self {
-            control_port,
+            config,
             control_server: server,
             event_bus: events,
             shutdown: shutdown::Shutdown::new(),
@@ -80,13 +79,18 @@ impl Server {
     ///
     /// ```no_run
     /// async fn run_server() {
-    ///     let server = tunneld_server::Server::new(6610, 6611, String::from("example.com"));
+    ///     let server = tunneld_server::Server::new(tunneld_server::Config{
+    ///         control_port: 8610,
+    ///         vhttp_port: 8611,
+    ///         domain: vec!["example.com".to_string()],
+    ///         ..Default::default()
+    ///     });
     ///     let shutdown = tokio::signal::ctrl_c();
     ///     server.run(shutdown).await.unwrap();
     /// }
     /// ```
     pub async fn run(self, shutdown: impl Future) -> anyhow::Result<()> {
-        let addr = format!("0.0.0.0:{}", self.control_port)
+        let addr = format!("0.0.0.0:{}", self.config.control_port)
             .to_socket_addrs()
             .context("parse control port")?
             .next()
@@ -98,7 +102,7 @@ impl Server {
         let shutdown_listener_control_server = self.shutdown.listen();
         let shutdown_listener_event_bus = self.shutdown.listen();
 
-        let handler = ControlHandler::new(self.shutdown.listen(), event_tx);
+        let handler = ControlHandler::new(self.config, self.shutdown.listen(), event_tx);
         let event_bus = self.event_bus;
         tokio::spawn(async move {
             event_bus
@@ -137,6 +141,7 @@ impl Server {
 /// ControlHeader is the core of the control server,
 /// it implements the grpc TunnelService.
 struct ControlHandler {
+    config: Config,
     event_tx: mpsc::Sender<event::ClientEvent>,
     bridges: Arc<DashMap<Bytes, bridge::DataSenderBridge>>,
     close_sender_notifiers: Arc<DashMap<Bytes, CancellationToken>>,
@@ -144,8 +149,13 @@ struct ControlHandler {
 }
 
 impl ControlHandler {
-    fn new(shutdown: ShutdownListener, event_tx: mpsc::Sender<event::ClientEvent>) -> Self {
+    fn new(
+        config: Config,
+        shutdown: ShutdownListener,
+        event_tx: mpsc::Sender<event::ClientEvent>,
+    ) -> Self {
         Self {
+            config,
             bridges: Arc::new(DashMap::new()),
             close_sender_notifiers: Arc::new(DashMap::new()),
             event_tx,
@@ -170,7 +180,12 @@ impl TunnelService for ControlHandler {
             command: Command::Init as i32,
             payload: Some(Payload::Init(InitPayload {
                 tunnel_id: tenant_id.to_string(),
-                assigned_entrypoint: "todo".to_string(),
+                assigned_entrypoint: self
+                    .config
+                    .make_entrypoint(&req)
+                    .into_iter()
+                    .map(|s| s.to_string())
+                    .collect(),
             })),
         };
         outbound_streaming_tx
@@ -441,7 +456,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_server() {
-        let server = Server::new(8610, 8611, "".to_string());
+        let server = Server::new(crate::Config {
+            control_port: 8610,
+            vhttp_port: 8611,
+            domain: vec!["example.com".to_string()],
+            ip: vec![],
+            vhttp_behind_proxy_tls: false,
+        });
         let cancel_w = CancellationToken::new();
         let cancel = cancel_w.clone();
 

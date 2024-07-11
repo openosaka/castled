@@ -6,6 +6,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tunneld_client::Client;
 use tunneld_pkg::shutdown::ShutdownListener;
+use tunneld_server::Config;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -190,7 +191,11 @@ impl TestServer {
 async fn start_server() -> TestServer {
     let control_port = free_port().unwrap();
     let vhttp_port = free_port().unwrap();
-    let server = tunneld_server::Server::new(control_port, vhttp_port, "".to_string());
+    let server = tunneld_server::Server::new(Config {
+        vhttp_port,
+        control_port,
+        ..Default::default()
+    });
     let cancel_w = CancellationToken::new();
     let cancel = cancel_w.clone();
     tokio::spawn(async move {

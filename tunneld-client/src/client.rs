@@ -240,7 +240,7 @@ impl<'a> Client<'a> {
                                     initialized = true;
                                     info!(
                                         tunnel_id = init.tunnel_id,
-                                        entrypoint = init.assigned_entrypoint,
+                                        entrypoint = ?init.assigned_entrypoint,
                                         "tunnel registered successfully",
                                     );
                                     continue; // the only path to success.

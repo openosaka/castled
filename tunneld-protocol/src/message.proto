@@ -32,7 +32,7 @@ message Control {
 
 message InitPayload {
   string tunnel_id = 1;
-  string assigned_entrypoint = 2;
+  repeated string assigned_entrypoint = 2;
 }
 
 // WorkPayload is sent when the server establishes a user connection.
@@ -106,16 +106,22 @@ message Tunnel {
 //
 // these three fields are exclusive.
 message HTTPConfig {
-  // the server will listen on the remote_port to accept the http request.
-  int32 remote_port = 1;
-  // the server assigns https://{subdomain}.{domain} as the entrypoint for the
-  // tunnel.
-  string subdomain = 2;
   // the server's public domain is https://tunneld.dev,
   // you may configure a subdomain https://monitor.tunneld.dev,
   // then the request matches the subdomain will be forwarded to the related
   // tunnel.
-  string domain = 3;
+  //
+  // if domain is not empty, the server will ignore the rest of the fields.
+  string domain = 1;
+
+  // the server assigns https://{subdomain}.{domain} as the entrypoint for the
+  // tunnel.
+  //
+  // if subdomain is not empty, the server will ignore the remote_port.
+  string subdomain = 2;
+
+  // the server will listen on the remote_port to accept the http request.
+  int32 remote_port = 4;
 }
 
 message TCPConfig { int32 remote_port = 1; }

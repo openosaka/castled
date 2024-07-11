@@ -1,24 +1,35 @@
+use std::net::IpAddr;
+
 use clap::Parser;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tunneld_pkg::otel::setup_logging;
-use tunneld_server::Server;
+use tunneld_server::{Config, Server};
 
 #[derive(Parser, Debug, Default)]
 struct Args {
     #[arg(long, default_value = "6610")]
     control_port: u16,
 
+    /// the vhttp server port, it serves all the http requests through the vhttp port.
     #[arg(long, default_value = "6611")]
     vhttp_port: u16,
 
-    /// Domain name for the http server, it could be empty,
+    /// Domain names for the http server, it could be empty,
     /// the client can't register with domain if it's empty.
     ///
     /// e.g. "tunnel.example.com", don't include the protocol.
-    #[arg(long, default_value = "", required = false)]
-    domain: String,
+    #[arg(long, required = false)]
+    domain: Vec<String>,
+
+    /// The IP addresses of the tunneld server.
+    #[arg(long, required = false)]
+    ip: Vec<IpAddr>,
+
+    /// If the vhttp server is behind a http proxy like nginx, set this to true.
+    #[arg(long, default_value = "false")]
+    vhttp_behind_proxy_tls: bool,
 }
 
 #[tokio::main]
@@ -42,7 +53,13 @@ async fn main() {
         cancel_w.cancel();
     });
 
-    let server = Server::new(args.control_port, args.vhttp_port, args.domain);
+    let server = Server::new(Config {
+        control_port: args.control_port,
+        vhttp_port: args.vhttp_port,
+        domain: args.domain,
+        ip: args.ip,
+        vhttp_behind_proxy_tls: args.vhttp_behind_proxy_tls,
+    });
     if let Err(err) = server.run(cancel.cancelled()).await {
         eprintln!("server error: {:?}", err);
     }
