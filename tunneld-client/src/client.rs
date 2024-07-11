@@ -10,7 +10,7 @@ use tokio::{
 };
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{transport::Channel, Streaming};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, span};
 use tunneld_pkg::{
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
     select_with_shutdown, shutdown,
@@ -173,6 +173,13 @@ impl<'a> Client<'a> {
         tunnel: Tunnel,
         local_endpoint: SocketAddr,
     ) -> Result<()> {
+        let span = span!(
+            tracing::Level::INFO,
+            "register_tunnel",
+            tunnel_name = tunnel.name
+        );
+        let _enter = span.enter();
+
         let is_udp = tunnel.r#type == Type::Udp as i32;
         let mut rpc_client = self.new_rpc_client().await?;
         let register = rpc_client.register(RegisterReq {
@@ -199,6 +206,7 @@ impl<'a> Client<'a> {
         })
     }
 
+    #[instrument(skip(self, shutdown_listener, rpc_client, register_resp))]
     async fn handle_control_stream(
         &self,
         shutdown_listener: shutdown::ShutdownListener,
@@ -230,7 +238,11 @@ impl<'a> Client<'a> {
                             match control.payload {
                                 Some(Payload::Init(init)) => {
                                     initialized = true;
-                                    debug!(tunnel_id = init.tunnel_id, "received init command");
+                                    info!(
+                                        tunnel_id = init.tunnel_id,
+                                        entrypoint = init.assigned_entrypoint,
+                                        "tunnel registered successfully",
+                                    );
                                     continue; // the only path to success.
                                 }
                                 Some(Payload::Work(_)) => {
