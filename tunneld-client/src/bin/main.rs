@@ -2,8 +2,11 @@ use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use std::net::{SocketAddr, ToSocketAddrs};
 use tokio::{net::lookup_host, signal};
-use tokio_util::sync::CancellationToken;
 use tracing::info;
+use tunneld_client::{
+    tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel},
+    TunnelFuture,
+};
 use tunneld_pkg::{otel::setup_logging, shutdown};
 
 #[derive(Parser)]
@@ -72,19 +75,11 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let cancel_w = CancellationToken::new();
-    let cancel = cancel_w.clone();
+    let shutdown = shutdown::Shutdown::new();
 
-    tokio::spawn(async move {
-        if let Err(e) = signal::ctrl_c().await {
-            // Something really weird happened. So just panic
-            panic!("Failed to listen for the ctrl-c signal: {:?}", e);
-        }
-        info!("Received ctrl-c signal. Shutting down...");
-        cancel_w.cancel();
-    });
-
-    let mut client = tunneld_client::Client::new(&args.server_addr).unwrap();
+    let client = tunneld_client::Client::new(args.server_addr).unwrap();
+    let entrypoint_rx: tokio::sync::oneshot::Receiver<Vec<String>>;
+    let future: TunnelFuture;
 
     match args.command {
         Commands::Tcp {
@@ -93,7 +88,10 @@ async fn main() -> anyhow::Result<()> {
             local_addr,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            client.add_tcp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port);
+            (future, entrypoint_rx) = client.register_tunnel(
+                new_tcp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port),
+                shutdown.listen(),
+            )?;
         }
         Commands::Udp {
             port,
@@ -101,7 +99,10 @@ async fn main() -> anyhow::Result<()> {
             local_addr,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            client.add_udp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port);
+            (future, entrypoint_rx) = client.register_tunnel(
+                new_udp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port),
+                shutdown.listen(),
+            )?;
         }
         Commands::Http {
             port,
@@ -112,20 +113,40 @@ async fn main() -> anyhow::Result<()> {
             random_subdomain,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            client.add_http_tunnel(
-                TUNNEL_NAME.to_string(),
-                local_endpoint,
-                remote_port.unwrap_or(0),
-                Bytes::from(subdomain.unwrap_or_default()),
-                Bytes::from(domain.unwrap_or_default()),
-                random_subdomain,
-            );
+            (future, entrypoint_rx) = client.register_tunnel(
+                new_http_tunnel(
+                    TUNNEL_NAME.to_string(),
+                    local_endpoint,
+                    Bytes::from(domain.unwrap_or_default()),
+                    Bytes::from(subdomain.unwrap_or_default()),
+                    random_subdomain,
+                    remote_port.unwrap_or(0),
+                ),
+                shutdown.listen(),
+            )?;
         }
     }
 
-    client
-        .run(shutdown::ShutdownListener::from_cancellation(cancel))
-        .await
+    tokio::spawn(async move {
+        if let Err(e) = signal::ctrl_c().await {
+            // Something really weird happened. So just panic
+            panic!("Failed to listen for the ctrl-c signal: {:?}", e);
+        }
+        info!("Received ctrl-c signal. Shutting down...");
+        shutdown.notify();
+    });
+
+    tokio::spawn(async move {
+        tokio::select! {
+            entrypoints = entrypoint_rx => {
+                info!("Entrypoints: {:?}", entrypoints);
+            }
+        }
+    });
+
+    future.await?;
+
+    Ok(())
 }
 
 async fn parse_socket_addr(local_addr: &str, port: u16) -> anyhow::Result<SocketAddr> {
