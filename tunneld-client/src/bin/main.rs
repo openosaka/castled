@@ -7,7 +7,7 @@ use tunneld_client::{
     tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel},
     TunnelFuture,
 };
-use tunneld_pkg::{otel::setup_logging, shutdown};
+use tunneld_pkg::{debug::setup_logging, shutdown};
 
 #[derive(Parser)]
 struct Args {

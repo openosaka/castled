@@ -6,7 +6,7 @@ FEATURES =
 
 ifeq ($(ENABLE_TOKIO_CONSOLE), 1)
 	RUSTFLAGS +="--cfg tokio_unstable"
-	FEATURES += "otel"
+	FEATURES += "debug"
 endif
 
 .PHONY: build

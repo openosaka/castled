@@ -4,7 +4,7 @@ use clap::Parser;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use tunneld_pkg::otel::setup_logging;
+use tunneld_pkg::debug::setup_logging;
 use tunneld_server::{Config, Server};
 
 #[derive(Parser, Debug, Default)]

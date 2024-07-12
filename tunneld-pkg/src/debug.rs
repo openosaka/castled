@@ -1,4 +1,4 @@
-#[cfg(feature = "otel")]
+#[cfg(feature = "debug")]
 pub fn setup_logging(default_console_port: u16) {
     use std::net::Ipv4Addr;
     use tracing_subscriber::prelude::*;
@@ -17,7 +17,7 @@ pub fn setup_logging(default_console_port: u16) {
         .init();
 }
 
-#[cfg(not(feature = "otel"))]
+#[cfg(not(feature = "debug"))]
 pub fn setup_logging(_: u16) {
     tracing_subscriber::fmt::init();
 }
