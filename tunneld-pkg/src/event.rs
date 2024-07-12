@@ -1,3 +1,5 @@
+use std::vec;
+
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -11,14 +13,42 @@ pub struct ClientEvent {
     pub payload: Payload,
     // the data server will send back the status of the control server
     // after it handles this event.
-    pub resp: oneshot::Sender<Option<Status>>,
+    pub resp: oneshot::Sender<ClientEventResponse>,
     // when client exits, the server will cancel the listener.
     pub close_listener: CancellationToken,
     // data server sends events to this channel continuously.
     pub incoming_events: IncomingEventSender,
 }
 
+/// ClientEventResponse is the response of the ClientEvent.
+#[derive(Debug)]
+pub enum ClientEventResponse {
+    Registered {
+        /// status is not None if the registration failed.
+        status: Option<Status>,
+        // entrypoint is available if the registration is successful.
+        entrypoint: Vec<String>,
+    },
+}
+
+impl ClientEventResponse {
+    pub fn registered(entrypoint: Vec<String>) -> Self {
+        Self::Registered {
+            status: None,
+            entrypoint,
+        }
+    }
+
+    pub fn registered_failed(status: Status) -> Self {
+        Self::Registered {
+            status: Some(status),
+            entrypoint: vec![],
+        }
+    }
+}
+
 /// Payload is the data of the ClientEvent.
+#[derive(Debug, Clone)]
 pub enum Payload {
     RegisterTcp {
         port: u16,
@@ -32,6 +62,7 @@ pub enum Payload {
         port: u16,
         subdomain: Bytes,
         domain: Bytes,
+        random_subdomain: bool,
     },
 }
 

@@ -14,6 +14,7 @@ use hyper_util::rt::TokioIo;
 use std::convert::Infallible;
 use std::io::Write;
 use std::sync::Arc;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info, info_span, Instrument as _};
@@ -50,53 +51,55 @@ impl Clone for Http {
 
 impl Http {
     pub(crate) fn new(port: u16, lookup: Arc<Box<dyn LookupRequest>>) -> Self {
+        info!(port, "http server started on port");
         Self { port, lookup }
     }
 
     pub(crate) async fn serve(self, shutdown: ShutdownListener) -> anyhow::Result<()> {
+        let shutdown = shutdown.clone();
+        let vhttp_listener =
+            get_with_shutdown!(create_tcp_listener(self.port), shutdown.cancelled())?;
+
+        self.serve_with_listener(vhttp_listener, shutdown);
+
+        Ok(())
+    }
+
+    pub(crate) fn serve_with_listener(self, listener: TcpListener, shutdown: ShutdownListener) {
         let this = Arc::new(self);
-
         let http1_builder = Arc::new(http1::Builder::new());
-        {
-            let shutdown = shutdown.clone();
-            let vhttp_listener =
-                get_with_shutdown!(create_tcp_listener(this.port), shutdown.cancelled())?;
+        let vhttp_handler = async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => {
+                        break;
+                    },
+                    Ok((stream, _addr)) = listener.accept() => {
+                        let this = Arc::clone(&this);
+                        let http1_builder = Arc::clone(&http1_builder);
 
-            let http1_builder = Arc::clone(&http1_builder);
-            let vhttp_handler = async move {
-                info!(port = this.port, "vhttp server started on port");
-                loop {
-                    tokio::select! {
-                        _ = shutdown.cancelled() => {
-                            return;
-                        },
-                        Ok((stream, _addr)) = vhttp_listener.accept() => {
-                            let this = Arc::clone(&this);
-                            let http1_builder = Arc::clone(&http1_builder);
-
-                            tokio::spawn(async move {
-                                let io = TokioIo::new(stream);
-                                let handler = async move {
-                                    let new_service = service_fn(move |req| {
-                                        let http_tunnel = this.clone();
-                                        async move {
-                                            Ok::<Response<BoxBody<Bytes, Infallible>>, hyper::Error>(
-                                                http_tunnel.call(req).await,
-                                            )
-                                        }
-                                    });
-                                    http1_builder.serve_connection(io, new_service).await
-                                }.instrument(info_span!("vhttp_handler"));
-                                tokio::task::spawn(handler);
-                            });
-                        }
+                        tokio::spawn(async move {
+                            let io = TokioIo::new(stream);
+                            let handler = async move {
+                                let new_service = service_fn(move |req| {
+                                    let http_tunnel = this.clone();
+                                    async move {
+                                        Ok::<Response<BoxBody<Bytes, Infallible>>, hyper::Error>(
+                                            http_tunnel.call(req).await,
+                                        )
+                                    }
+                                });
+                                http1_builder.serve_connection(io, new_service).await
+                            }.instrument(info_span!("vhttp_handler"));
+                            tokio::task::spawn(handler);
+                        });
                     }
                 }
             }
-            .instrument(info_span!("vhttp listener"));
-            tokio::spawn(vhttp_handler);
+            info!(port = this.port, "http server stopped")
         }
-        Ok(())
+        .instrument(info_span!("vhttp listener"));
+        tokio::spawn(vhttp_handler);
     }
 
     async fn call(&self, req: Request<Incoming>) -> Response<BoxBody<Bytes, Infallible>> {
@@ -277,16 +280,16 @@ impl DynamicRegistry {
         self.domains.remove(&domain);
     }
 
-    pub(crate) fn domain_registered(&self, domain: Bytes) -> bool {
-        self.domains.contains_key(&domain)
+    pub(crate) fn domain_registered(&self, domain: &Bytes) -> bool {
+        self.domains.contains_key(domain)
     }
 
     pub(crate) fn get_domain(&self, domain: Bytes) -> Option<mpsc::Sender<event::UserIncoming>> {
         self.domains.get(&domain).map(|x| x.value().clone())
     }
 
-    pub(crate) fn subdomain_registered(&self, subdomain: Bytes) -> bool {
-        self.subdomains.contains_key(&subdomain)
+    pub(crate) fn subdomain_registered(&self, subdomain: &Bytes) -> bool {
+        self.subdomains.contains_key(subdomain)
     }
 
     pub(crate) fn unregister_subdomain(&self, subdomain: Bytes) {
@@ -326,10 +329,10 @@ mod test {
         http1.register_subdomain(Bytes::from_static(b"foo"), tx2.clone());
         http2.register_subdomain(Bytes::from_static(b"bar"), tx2.clone());
 
-        assert!(http1.domain_registered(Bytes::from_static(b"example2.com")));
-        assert!(http2.domain_registered(Bytes::from_static(b"example1.com")));
-        assert!(http1.subdomain_registered(Bytes::from_static(b"bar")));
-        assert!(http2.subdomain_registered(Bytes::from_static(b"foo")));
+        assert!(http1.domain_registered(&Bytes::from_static(b"example2.com")));
+        assert!(http2.domain_registered(&Bytes::from_static(b"example1.com")));
+        assert!(http1.subdomain_registered(&Bytes::from_static(b"bar")));
+        assert!(http2.subdomain_registered(&Bytes::from_static(b"foo")));
 
         assert!(http1
             .get_domain(Bytes::from_static(b"example2.com"))
@@ -352,11 +355,11 @@ mod test {
         assert!(received.is_some());
 
         http2.unregister_subdomain(Bytes::from_static(b"foo"));
-        assert!(!http1.subdomain_registered(Bytes::from_static(b"foo")));
-        assert!(http1.subdomain_registered(Bytes::from_static(b"bar")));
+        assert!(!http1.subdomain_registered(&Bytes::from_static(b"foo")));
+        assert!(http1.subdomain_registered(&Bytes::from_static(b"bar")));
 
         http1.unregister_domain(Bytes::from_static(b"example2.com"));
-        assert!(!http2.domain_registered(Bytes::from_static(b"example2.com")));
-        assert!(http2.domain_registered(Bytes::from_static(b"example1.com")));
+        assert!(!http2.domain_registered(&Bytes::from_static(b"example2.com")));
+        assert!(http2.domain_registered(&Bytes::from_static(b"example1.com")));
     }
 }

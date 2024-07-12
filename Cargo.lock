@@ -2027,6 +2027,7 @@ dependencies = [
  "bytes",
  "clap",
  "dashmap",
+ "fastrand",
  "futures",
  "futures-util",
  "http 1.1.0",

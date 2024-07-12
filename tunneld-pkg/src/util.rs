@@ -8,7 +8,7 @@ pub async fn create_tcp_listener(port: u16) -> Result<TcpListener, Status> {
         .map_err(map_bind_error)
 }
 
-pub async fn create_udp_listener(port: u16) -> Result<UdpSocket, Status> {
+pub async fn create_udp_socket(port: u16) -> Result<UdpSocket, Status> {
     UdpSocket::bind(("0.0.0.0", port))
         .await
         .map_err(map_bind_error)

@@ -117,13 +117,24 @@ message HTTPConfig {
   // the server assigns https://{subdomain}.{domain} as the entrypoint for the
   // tunnel.
   //
-  // if subdomain is not empty, the server will ignore the remote_port.
+  // if subdomain is not empty, the server will ignore the rest of the fields.
   string subdomain = 2;
 
+  // if random_subdomain is true, the server will assign a random subdomain.
+  bool random_subdomain = 3;
+
+  // random_port is the lowest priority option, the server will assign a random port
+  // if the remote_port is empty.
   // the server will listen on the remote_port to accept the http request.
   int32 remote_port = 4;
 }
 
-message TCPConfig { int32 remote_port = 1; }
+message TCPConfig { 
+  // if remote_port is empty, the server will assign a random port.
+  int32 remote_port = 1;
+}
 
-message UDPConfig { int32 remote_port = 1; }
+message UDPConfig {
+  // if remote_port is empty, the server will assign a random port.
+  int32 remote_port = 1; 
+}

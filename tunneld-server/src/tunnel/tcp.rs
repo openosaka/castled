@@ -7,11 +7,15 @@ use tokio::{
     sync::mpsc,
 };
 use tokio_util::sync::CancellationToken;
+use tonic::Status;
 use tracing::{debug, error};
 use tunneld_pkg::{
     event,
     io::{StreamingReader, StreamingWriter, VecWrapper},
+    util::create_tcp_listener,
 };
+
+use super::SocketCreator;
 
 pub struct Tcp {
     listener: TcpListener,
@@ -90,5 +94,13 @@ impl Tcp {
                 }
             }
         }
+    }
+}
+
+impl SocketCreator for Tcp {
+    type Output = TcpListener;
+
+    async fn create_socket(port: u16) -> anyhow::Result<TcpListener, Status> {
+        create_tcp_listener(port).await
     }
 }

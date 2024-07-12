@@ -18,3 +18,21 @@ Basically, this tunnel is primarily for this purpose. If you want to expose your
 
 [ngrok]: https://ngrok.com/
 [frp]: https://github.com/fatedier/frp
+
+
+## Features
+
+- Tcp tunnel
+	- specify the remote port
+	- random remote port if not specified
+- Udp tunnel
+	- specify the remote port
+	- random remote port if not specified
+- Http tunnel
+	- specify the domain
+	- specify the subdomain
+	- specify the remote port
+	- random subdomain if `--random-subdomain` is specified
+	- random remote port if not specified
+	- support http/1.1
+	- [ ] support http/2
