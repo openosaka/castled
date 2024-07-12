@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
 
     let shutdown = shutdown::Shutdown::new();
 
-    let client = tunneld_client::Client::new(args.server_addr).unwrap();
+    let client = tunneld_client::Client::new(args.server_addr);
     let entrypoint_rx: tokio::sync::oneshot::Receiver<Vec<String>>;
     let future: TunnelFuture;
 

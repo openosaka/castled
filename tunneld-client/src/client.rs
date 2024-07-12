@@ -1,15 +1,16 @@
-use std::{net::SocketAddr, pin::Pin};
-
+use crate::tunnel::Tunnel;
 use anyhow::{Context, Result};
 use futures::Future;
+use std::{net::SocketAddr, pin::Pin};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tonic::{transport::Channel, Streaming};
+use tracing::{debug, error, info, instrument, span};
+
 use tokio::{
     io::{self, AsyncRead, AsyncWrite, AsyncWriteExt},
     net::{TcpStream, UdpSocket},
     sync::{mpsc, oneshot},
 };
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-use tonic::{transport::Channel, Streaming};
-use tracing::{debug, error, info, instrument, span};
 use tunneld_pkg::{
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
     select_with_shutdown, shutdown,
@@ -20,19 +21,44 @@ use tunneld_protocol::pb::{
     TrafficToServer,
 };
 
-use crate::tunnel::Tunnel;
-
+/// Client represents a tunneld client that can register tunnels with the server.
 pub struct Client {
     control_addr: SocketAddr,
 }
 
+/// TunnelFuture is a future that represents the tunnel handler.
+///
+/// The tunnel future is responsible for handling the tunnel process.
 pub type TunnelFuture<'a> = Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + Send + 'a>>;
 
 impl Client {
-    pub fn new(addr: SocketAddr) -> Result<Self> {
-        Ok(Self { control_addr: addr })
+    /// Creates a new `Client` instance with the specified control address.
+    ///
+    /// ```
+    /// let client = tunneld_client::Client::new("127.0.0.1:6100".parse().unwrap());
+    /// ```
+    pub fn new(addr: SocketAddr) -> Self {
+        Self { control_addr: addr }
     }
 
+    /// Registers a tunnel with the server and returns a future that represents the tunnel handler.
+    /// Also returns a receiver for receiving the assigned entrypoint from the server.
+    ///
+    /// ```no_run
+    /// use std::net::SocketAddr;
+    /// use tunneld_pkg::shutdown::Shutdown;
+    /// use tunneld_client::Client;
+    /// use tunneld_client::tunnel::new_tcp_tunnel;
+    ///
+    /// let client = Client::new("127.0.0.1:6100".parse().unwrap());
+    /// let tunnel = new_tcp_tunnel(String::from("my-tunnel"), SocketAddr::from(([127, 0, 0, 1], 8971)), 8080);
+    /// let shutdown_listener = Shutdown::new().listen();
+    /// let (handler, entrypoint_rx) = client.register_tunnel(tunnel, shutdown_listener).unwrap();
+    /// tokio::spawn(async move {
+    ///     let entrypoint = entrypoint_rx.await.unwrap();
+    /// });
+    /// // handler.await;
+    /// ```
     pub fn register_tunnel(
         &self,
         tunnel: Tunnel,
@@ -52,6 +78,7 @@ impl Client {
         Ok((Box::pin(handler), entrypoint_rx))
     }
 
+    /// Handles the tunnel registration process.
     async fn handle_tunnel(
         &self,
         shutdown_listener: shutdown::ShutdownListener,
@@ -93,6 +120,7 @@ impl Client {
         })
     }
 
+    /// Handles the control stream from the server.
     #[instrument(skip(self, shutdown_listener, rpc_client, register_resp, hook))]
     async fn handle_control_stream(
         &self,
@@ -188,6 +216,7 @@ impl Client {
         Ok(())
     }
 
+    /// Creates a new RPC client and connects to the server.
     #[instrument(skip(self))]
     async fn new_rpc_client(&self) -> Result<TunnelServiceClient<Channel>> {
         debug!("connecting server");
@@ -199,6 +228,7 @@ impl Client {
     }
 }
 
+/// Handles the work traffic from the server to the local endpoint.
 #[instrument(skip(rpc_client))]
 async fn handle_work_traffic(
     mut rpc_client: TunnelServiceClient<Channel>,
@@ -329,7 +359,7 @@ async fn handle_work_traffic(
     Ok(())
 }
 
-/// Forward the traffic from the server to the local.
+/// Forwards the traffic from the server to the local endpoint.
 ///
 /// Try to imagine the current client is yourself,
 /// your mission is to forward the traffic from the server to the local,
