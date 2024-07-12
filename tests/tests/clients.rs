@@ -4,9 +4,12 @@ use bytes::Bytes;
 use tests::{free_port, is_port_listening};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tunneld_client::Client;
+use tunneld_client::{
+    tunnel::{new_http_tunnel, new_tcp_tunnel},
+    Client,
+};
 use tunneld_pkg::shutdown::ShutdownListener;
-use tunneld_server::Config;
+use tunneld_server::{Config, EntrypointConfig};
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -21,23 +24,32 @@ fn init() {
 #[tokio::test]
 async fn client_register_tcp() {
     init();
-    let server = start_server().await;
+    let domain = "example.com";
+    let server = start_server(vec![domain.to_string()]).await;
     let close_client = server.cancel.clone();
     let remote_port = free_port().unwrap();
     let control_addr = server.control_addr().clone();
 
     let client_handler = tokio::spawn(async move {
-        let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel(
-            "test".to_string(),
-            SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
-            remote_port,
-        );
+        let client = Client::new(control_addr).unwrap();
+        let (handler, entrypoint_rx) = client
+            .register_tunnel(
+                new_tcp_tunnel(
+                    "test".to_string(),
+                    SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
+                    remote_port,
+                ),
+                ShutdownListener::from_cancellation(close_client),
+            )
+            .unwrap();
 
-        let client_exit = client
-            .run(ShutdownListener::from_cancellation(close_client))
-            .await;
-        assert!(client_exit.is_ok());
+        if let Err(err) = handler.await {
+            return Err(err);
+        }
+        let entrypoint = entrypoint_rx.await.unwrap();
+        assert_eq!(1, entrypoint.len());
+        assert_eq!(entrypoint[0], format!("tcp://{}:{}", domain, remote_port));
+        Ok(())
     });
 
     // check the remote port is available
@@ -62,26 +74,30 @@ async fn client_register_tcp() {
 #[tokio::test]
 async fn client_register_and_close_then_register_again() {
     init();
-    let server = start_server().await;
+    let server = start_server(vec![]).await;
 
     let cancel_client_w = CancellationToken::new();
     let close_client = cancel_client_w.clone();
     let remote_port = free_port().unwrap();
 
-    let control_addr = server.control_addr().clone();
+    let control_addr = server.control_addr();
     let client_handler = tokio::spawn(async move {
-        let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel(
-            "test".to_string(),
-            SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
-            remote_port,
-        );
+        let client = Client::new(control_addr).unwrap();
+        let (handler, _) = client
+            .register_tunnel(
+                new_tcp_tunnel(
+                    "test".to_string(),
+                    SocketAddr::from(([127, 0, 0, 1], 8971)),
+                    remote_port,
+                ),
+                ShutdownListener::from_cancellation(close_client),
+            )
+            .unwrap();
 
-        sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
-        let client_exit = client
-            .run(ShutdownListener::from_cancellation(close_client))
-            .await;
-        assert!(client_exit.is_ok());
+        if let Err(err) = handler.await {
+            return Err(err);
+        }
+        Ok(())
     });
 
     tokio::spawn(async move {
@@ -97,18 +113,22 @@ async fn client_register_and_close_then_register_again() {
     let close_client = cancel_client_w.clone();
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
-        let mut client = Client::new(&control_addr).unwrap();
-        client.add_tcp_tunnel(
-            "test".to_string(),
-            SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
-            remote_port,
-        );
+        let client = Client::new(control_addr).unwrap();
+        let (handler, _) = client
+            .register_tunnel(
+                new_tcp_tunnel(
+                    "test".to_string(),
+                    SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
+                    remote_port,
+                ),
+                ShutdownListener::from_cancellation(close_client),
+            )
+            .unwrap();
 
-        sleep(tokio::time::Duration::from_millis(200)).await; // wait for server to start
-        let client_exit = client
-            .run(ShutdownListener::from_cancellation(close_client))
-            .await;
-        assert!(client_exit.is_ok());
+        if let Err(err) = handler.await {
+            return Err(err);
+        }
+        Ok(())
     });
 
     tokio::spawn(async move {
@@ -135,25 +155,30 @@ async fn register_http_tunnel_with_subdomain() {
         .await;
 
     init();
-    let server = start_server().await;
+    let server = start_server(vec![]).await;
     let close_client = server.cancel.clone();
     let control_addr = server.control_addr().clone();
 
     let client_handler = tokio::spawn(async move {
-        let mut client = Client::new(&control_addr).unwrap();
-        client.add_http_tunnel(
-            "test".to_string(),
-            SocketAddr::from(([127, 0, 0, 1], local_port)),
-            0,
-            Bytes::from("foo"),
-            Bytes::from(""),
-            false,
-        );
+        let client = Client::new(control_addr).unwrap();
+        let (handler, _) = client
+            .register_tunnel(
+                new_http_tunnel(
+                    "test".to_string(),
+                    SocketAddr::from(([127, 0, 0, 1], local_port)),
+                    Bytes::from(""),
+                    Bytes::from("foo"),
+                    false,
+                    0,
+                ),
+                ShutdownListener::from_cancellation(close_client),
+            )
+            .unwrap();
 
-        let client_exit = client
-            .run(ShutdownListener::from_cancellation(close_client))
-            .await;
-        assert!(client_exit.is_ok());
+        if let Err(err) = handler.await {
+            return Err(err);
+        }
+        Ok(())
     });
 
     sleep(tokio::time::Duration::from_millis(100)).await;
@@ -189,13 +214,16 @@ impl TestServer {
     }
 }
 
-async fn start_server() -> TestServer {
+async fn start_server(domain: Vec<String>) -> TestServer {
     let control_port = free_port().unwrap();
     let vhttp_port = free_port().unwrap();
     let server = tunneld_server::Server::new(Config {
         vhttp_port,
         control_port,
-        ..Default::default()
+        entrypoint: EntrypointConfig {
+            domain: domain,
+            ..Default::default()
+        },
     });
     let cancel_w = CancellationToken::new();
     let cancel = cancel_w.clone();

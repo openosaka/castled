@@ -1,12 +1,11 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, pin::Pin};
 
 use anyhow::{Context, Result};
-use bytes::Bytes;
-use futures::future::join_all;
+use futures::Future;
 use tokio::{
     io::{self, AsyncRead, AsyncWrite, AsyncWriteExt},
     net::{TcpStream, UdpSocket},
-    sync::mpsc,
+    sync::{mpsc, oneshot},
 };
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{transport::Channel, Streaming};
@@ -16,216 +15,49 @@ use tunneld_pkg::{
     select_with_shutdown, shutdown,
 };
 use tunneld_protocol::pb::{
-    control::Payload,
-    traffic_to_server,
-    tunnel::{self, Type},
-    tunnel_service_client::TunnelServiceClient,
-    Command, Control, HttpConfig, RegisterReq, TcpConfig, TrafficToClient, TrafficToServer, Tunnel,
-    UdpConfig,
+    self, control::Payload, traffic_to_server, tunnel::Type,
+    tunnel_service_client::TunnelServiceClient, Command, Control, RegisterReq, TrafficToClient,
+    TrafficToServer,
 };
 
-pub struct Client<'a> {
-    control_addr: &'a SocketAddr,
-    tcp_tunnels: Vec<TcpTunnel>,
-    udp_tunnels: Vec<UdpTunnel>,
-    http_tunnels: Vec<HttpTunnel>,
+use crate::tunnel::Tunnel;
+
+pub struct Client {
+    control_addr: SocketAddr,
 }
 
-struct TcpTunnel {
-    name: String,
-    local_endpoint: SocketAddr,
-    remote_port: u16,
-}
+pub type TunnelFuture<'a> = Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + Send + 'a>>;
 
-struct UdpTunnel {
-    name: String,
-    local_endpoint: SocketAddr,
-    remote_port: u16,
-}
-
-struct HttpTunnel {
-    name: String,
-    local_endpoint: SocketAddr,
-    config_fn: HttpConfigFn,
-}
-
-type HttpConfigFn = Box<dyn Fn() -> HttpConfig + Send + Sync>;
-
-fn domain_config(domain: Bytes) -> HttpConfigFn {
-    Box::new(move || HttpConfig {
-        domain: String::from_utf8_lossy(domain.as_ref()).to_string(),
-        random_subdomain: false,
-        remote_port: 0,
-        subdomain: String::new(),
-    })
-}
-
-fn subdomain_config(subdomain: Bytes) -> HttpConfigFn {
-    Box::new(move || HttpConfig {
-        random_subdomain: false,
-        domain: String::new(),
-        remote_port: 0,
-        subdomain: String::from_utf8_lossy(subdomain.as_ref()).to_string(),
-    })
-}
-
-fn remote_port_config(remote_port: u16) -> HttpConfigFn {
-    Box::new(move || HttpConfig {
-        remote_port: remote_port as i32,
-        random_subdomain: false,
-        domain: String::new(),
-        subdomain: String::new(),
-    })
-}
-
-fn random_subdomain_config() -> HttpConfigFn {
-    Box::new(move || HttpConfig {
-        random_subdomain: true,
-        domain: String::new(),
-        remote_port: 0,
-        subdomain: String::new(),
-    })
-}
-
-fn random_remote_port_config() -> HttpConfigFn {
-    // all the options are false, so it will be a random remote port
-    Box::new(move || HttpConfig {
-        domain: String::new(),
-        remote_port: 0,
-        subdomain: String::new(),
-        random_subdomain: false,
-    })
-}
-
-impl<'a> Client<'a> {
-    pub fn new(addr: &'a SocketAddr) -> Result<Self> {
-        Ok(Self {
-            control_addr: addr,
-            tcp_tunnels: Vec::new(),
-            udp_tunnels: Vec::new(),
-            http_tunnels: Vec::new(),
-        })
+impl Client {
+    pub fn new(addr: SocketAddr) -> Result<Self> {
+        Ok(Self { control_addr: addr })
     }
 
-    pub async fn run(&mut self, shutdown_listener: shutdown::ShutdownListener) -> Result<()> {
-        let mut tasks = Vec::new();
-        for tcp_tunnel in self.tcp_tunnels.iter() {
-            let tunnel = Tunnel {
-                name: tcp_tunnel.name.to_string(),
-                r#type: Type::Tcp as i32,
-                config: Some(tunnel::Config::Tcp(TcpConfig {
-                    remote_port: tcp_tunnel.remote_port as i32,
-                })),
-                ..Default::default()
-            };
-            tasks.push(self.handle_tunnel(
-                shutdown_listener.clone(),
-                tunnel,
-                tcp_tunnel.local_endpoint,
-            ));
-        }
-
-        for udp_tunnel in self.udp_tunnels.iter() {
-            let tunnel = Tunnel {
-                name: udp_tunnel.name.to_string(),
-                r#type: Type::Udp as i32,
-                config: Some(tunnel::Config::Udp(UdpConfig {
-                    remote_port: udp_tunnel.remote_port as i32,
-                })),
-                ..Default::default()
-            };
-            tasks.push(self.handle_tunnel(
-                shutdown_listener.clone(),
-                tunnel,
-                udp_tunnel.local_endpoint,
-            ));
-        }
-
-        for http_tunnel in self.http_tunnels.iter() {
-            let config_fn = &http_tunnel.config_fn;
-            let tunnel = Tunnel {
-                name: http_tunnel.name.to_string(),
-                r#type: Type::Http as i32,
-                config: Some(tunnel::Config::Http(config_fn())),
-                ..Default::default()
-            };
-            tasks.push(self.handle_tunnel(
-                shutdown_listener.clone(),
-                tunnel,
-                http_tunnel.local_endpoint,
-            ));
-        }
-
-        let results = join_all(tasks).await;
-        // check if there is any error, if so, return the first error
-        for result in results {
-            result?
-        }
-
-        Ok(())
-    }
-
-    pub fn add_tcp_tunnel(&mut self, name: String, local_endpoint: SocketAddr, remote_port: u16) {
-        info!(
-            name,
-            remote_port,
-            local_endpoint = ?local_endpoint,
-            "Registering TCP tunnel",
+    pub fn register_tunnel(
+        &self,
+        tunnel: Tunnel,
+        shutdown_listener: shutdown::ShutdownListener,
+    ) -> Result<(TunnelFuture, oneshot::Receiver<Vec<String>>)> {
+        let (entrypoint_tx, entrypoint_rx) = oneshot::channel();
+        let handler = self.handle_tunnel(
+            shutdown_listener,
+            tunnel.inner,
+            tunnel.local_endpoint,
+            Some(|entrypoint: Vec<String>| {
+                if let Err(err) = entrypoint_tx.send(entrypoint) {
+                    error!(err = ?err, "failed to send entrypoint the receiver may be dropped, check your code");
+                }
+            }),
         );
-        self.tcp_tunnels.push(TcpTunnel {
-            name,
-            remote_port,
-            local_endpoint,
-        });
-    }
-
-    pub fn add_udp_tunnel(&mut self, name: String, local_endpoint: SocketAddr, remote_port: u16) {
-        info!(
-            name,
-            remote_port,
-            local_endpoint = ?local_endpoint,
-            "Registering UDP tunnel"
-        );
-        self.udp_tunnels.push(UdpTunnel {
-            name,
-            remote_port,
-            local_endpoint,
-        });
-    }
-
-    pub fn add_http_tunnel(
-        &mut self,
-        name: String,
-        local_endpoint: SocketAddr,
-        remote_port: u16,
-        subdomain: Bytes,
-        domain: Bytes,
-        random_subdomain: bool,
-    ) {
-        let config_fn = if !domain.is_empty() {
-            domain_config(domain)
-        } else if !subdomain.is_empty() {
-            subdomain_config(subdomain)
-        } else if remote_port != 0 {
-            remote_port_config(remote_port)
-        } else if random_subdomain {
-            random_subdomain_config()
-        } else {
-            random_remote_port_config()
-        };
-
-        self.http_tunnels.push(HttpTunnel {
-            name,
-            local_endpoint,
-            config_fn,
-        });
+        Ok((Box::pin(handler), entrypoint_rx))
     }
 
     async fn handle_tunnel(
         &self,
         shutdown_listener: shutdown::ShutdownListener,
-        tunnel: Tunnel,
+        tunnel: pb::Tunnel,
         local_endpoint: SocketAddr,
+        hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
     ) -> Result<()> {
         let span = span!(
             tracing::Level::INFO,
@@ -253,6 +85,7 @@ impl<'a> Client<'a> {
                         register_resp,
                         local_endpoint,
                         is_udp,
+                        hook,
                     )
                     .await
                 }
@@ -260,7 +93,7 @@ impl<'a> Client<'a> {
         })
     }
 
-    #[instrument(skip(self, shutdown_listener, rpc_client, register_resp))]
+    #[instrument(skip(self, shutdown_listener, rpc_client, register_resp, hook))]
     async fn handle_control_stream(
         &self,
         shutdown_listener: shutdown::ShutdownListener,
@@ -268,6 +101,7 @@ impl<'a> Client<'a> {
         register_resp: tonic::Response<Streaming<Control>>,
         local_endpoint: SocketAddr,
         is_udp: bool,
+        mut hook: Option<impl FnOnce(Vec<String>)>,
     ) -> Result<()> {
         let mut control_stream = register_resp.into_inner();
         let mut initialized = false;
@@ -297,6 +131,9 @@ impl<'a> Client<'a> {
                                         entrypoint = ?init.assigned_entrypoint,
                                         "tunnel registered successfully",
                                     );
+                                    if let Some(hook) = hook.take() {
+                                        hook(init.assigned_entrypoint.clone());
+                                    }
                                     continue; // the only path to success.
                                 }
                                 Some(Payload::Work(_)) => {
