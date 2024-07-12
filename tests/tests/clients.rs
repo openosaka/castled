@@ -1,11 +1,11 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use bytes::Bytes;
 use tests::{free_port, is_port_listening};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tunneld_client::{
-    tunnel::{new_http_tunnel, new_tcp_tunnel},
+    tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel, Tunnel},
     Client,
 };
 use tunneld_pkg::shutdown::ShutdownListener;
@@ -25,7 +25,11 @@ fn init() {
 async fn client_register_tcp() {
     init();
     let domain = "example.com";
-    let server = start_server(vec![domain.to_string()]).await;
+    let server = start_server(EntrypointConfig {
+        domain: vec![domain.to_string()],
+        ..Default::default()
+    })
+    .await;
     let close_client = server.cancel.clone();
     let remote_port = free_port().unwrap();
     let control_addr = server.control_addr().clone();
@@ -74,7 +78,7 @@ async fn client_register_tcp() {
 #[tokio::test]
 async fn client_register_and_close_then_register_again() {
     init();
-    let server = start_server(vec![]).await;
+    let server = start_server(Default::default()).await;
 
     let cancel_client_w = CancellationToken::new();
     let close_client = cancel_client_w.clone();
@@ -155,7 +159,7 @@ async fn register_http_tunnel_with_subdomain() {
         .await;
 
     init();
-    let server = start_server(vec![]).await;
+    let server = start_server(Default::default()).await;
     let close_client = server.cancel.clone();
     let control_addr = server.control_addr().clone();
 
@@ -201,6 +205,274 @@ async fn register_http_tunnel_with_subdomain() {
     assert!(client_exit.0.is_ok());
 }
 
+#[tokio::test]
+async fn test_assigned_entrypoint() {
+    struct TestTunnel {
+        tunnel: Tunnel,
+        expected: Vec<&'static str>,
+    }
+
+    struct Case {
+        entrypoint: EntrypointConfig,
+        tunnels: Vec<TestTunnel>,
+    }
+
+    let cases = vec![
+        Case {
+            entrypoint: Default::default(),
+            tunnels: vec![
+                TestTunnel {
+                    tunnel: new_tcp_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        8080,
+                    ),
+                    expected: vec![],
+                },
+                TestTunnel {
+                    tunnel: new_udp_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        8080,
+                    ),
+                    expected: vec![],
+                },
+                TestTunnel {
+                    tunnel: new_http_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8080)),
+                        Bytes::from(""),
+                        Bytes::from(""),
+                        false,
+                        0,
+                    ),
+                    expected: vec![],
+                },
+            ],
+        },
+        Case {
+            entrypoint: EntrypointConfig {
+                domain: vec!["example.com".to_string()],
+                ..Default::default()
+            },
+            tunnels: vec![
+                TestTunnel {
+                    tunnel: new_tcp_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        8080,
+                    ),
+                    expected: vec!["tcp://example.com:8080"],
+                },
+                TestTunnel {
+                    tunnel: new_udp_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        8080,
+                    ),
+                    expected: vec!["udp://example.com:8080"],
+                },
+                TestTunnel {
+                    tunnel: new_http_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8080)),
+                        Bytes::from(""),
+                        Bytes::from(""),
+                        false,
+                        9999,
+                    ),
+                    expected: vec!["http://example.com:9999"],
+                },
+                TestTunnel {
+                    tunnel: new_http_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8080)),
+                        Bytes::from("mydomain.com"),
+                        Bytes::from(""),
+                        false,
+                        9999,
+                    ),
+                    expected: vec!["http://mydomain.com"],
+                },
+                TestTunnel {
+                    tunnel: new_http_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8080)),
+                        Bytes::from(""),
+                        Bytes::from("foo"),
+                        false,
+                        9999,
+                    ),
+                    expected: vec!["http://foo.example.com"],
+                },
+            ],
+        },
+        Case {
+            entrypoint: EntrypointConfig {
+                ip: vec![IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))],
+                ..Default::default()
+            },
+            tunnels: vec![
+                TestTunnel {
+                    tunnel: new_tcp_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        8080,
+                    ),
+                    expected: vec!["tcp://127.0.0.1:8080"],
+                },
+                TestTunnel {
+                    tunnel: new_udp_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        8080,
+                    ),
+                    expected: vec!["udp://127.0.0.1:8080"],
+                },
+                TestTunnel {
+                    tunnel: new_http_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8080)),
+                        Bytes::from(""),
+                        Bytes::from(""),
+                        false,
+                        9999,
+                    ),
+                    expected: vec!["http://127.0.0.1:9999"],
+                },
+                TestTunnel {
+                    tunnel: new_http_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8080)),
+                        Bytes::from("mydomain.com"),
+                        Bytes::from(""),
+                        false,
+                        9999,
+                    ),
+                    expected: vec!["http://mydomain.com"],
+                },
+                TestTunnel {
+                    tunnel: new_http_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8080)),
+                        Bytes::from(""),
+                        Bytes::from("foo"),
+                        false,
+                        9999,
+                    ),
+                    expected: vec![/* no assigned entrypoint, because server doesn't has a domain */],
+                },
+            ],
+        },
+        Case {
+            entrypoint: EntrypointConfig {
+                domain: vec!["example.com".to_string(), "foo.example.com".to_string()],
+                ip: vec![IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))],
+                vhttp_behind_proxy_tls: true,
+                ..Default::default()
+            },
+            tunnels: vec![
+                TestTunnel {
+                    tunnel: new_tcp_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        8080,
+                    ),
+                    expected: vec![
+                        "tcp://127.0.0.1:8080",
+                        "tcp://example.com:8080",
+                        "tcp://foo.example.com:8080",
+                    ],
+                },
+                TestTunnel {
+                    tunnel: new_udp_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        8080,
+                    ),
+                    expected: vec![
+                        "udp://127.0.0.1:8080",
+                        "udp://example.com:8080",
+                        "udp://foo.example.com:8080",
+                    ],
+                },
+                TestTunnel {
+                    tunnel: new_http_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8080)),
+                        Bytes::from(""),
+                        Bytes::from(""),
+                        false,
+                        9999,
+                    ),
+                    expected: vec![
+                        "http://127.0.0.1:9999",
+                        "http://example.com:9999",
+                        "http://foo.example.com:9999",
+                    ],
+                },
+                TestTunnel {
+                    tunnel: new_http_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8080)),
+                        Bytes::from("mydomain.com"),
+                        Bytes::from(""),
+                        false,
+                        9999,
+                    ),
+                    expected: vec!["https://mydomain.com"],
+                },
+                TestTunnel {
+                    tunnel: new_http_tunnel(
+                        "test".to_string(),
+                        SocketAddr::from(([127, 0, 0, 1], 8080)),
+                        Bytes::from(""),
+                        Bytes::from("bar"),
+                        false,
+                        9999,
+                    ),
+                    expected: vec!["https://bar.example.com", "https://bar.foo.example.com"],
+                },
+            ],
+        },
+    ];
+
+    for case in cases {
+        let server = start_server(case.entrypoint).await;
+
+        for tunnel in case.tunnels {
+            let cancel_client_w = CancellationToken::new();
+            let close_client = cancel_client_w.clone();
+            let control_addr = server.control_addr();
+
+            let client_handler = tokio::spawn(async move {
+                let client = Client::new(control_addr).unwrap();
+                let (handler, entrypoint_rx) = client
+                    .register_tunnel(
+                        tunnel.tunnel,
+                        ShutdownListener::from_cancellation(close_client),
+                    )
+                    .unwrap();
+
+                if let Err(err) = handler.await {
+                    return Err(err);
+                }
+
+                let actual = entrypoint_rx.await;
+                assert_eq!(actual.unwrap(), tunnel.expected);
+                Ok(())
+            });
+
+            tokio::spawn(async move {
+                sleep(tokio::time::Duration::from_millis(300)).await;
+                cancel_client_w.cancel();
+            });
+
+            let _ = tokio::join!(client_handler);
+        }
+    }
+}
+
 struct TestServer {
     control_port: u16,
     vhttp_port: u16,
@@ -214,16 +486,13 @@ impl TestServer {
     }
 }
 
-async fn start_server(domain: Vec<String>) -> TestServer {
+async fn start_server(entrypoint_config: EntrypointConfig) -> TestServer {
     let control_port = free_port().unwrap();
     let vhttp_port = free_port().unwrap();
     let server = tunneld_server::Server::new(Config {
         vhttp_port,
         control_port,
-        entrypoint: EntrypointConfig {
-            domain: domain,
-            ..Default::default()
-        },
+        entrypoint: entrypoint_config,
     });
     let cancel_w = CancellationToken::new();
     let cancel = cancel_w.clone();
