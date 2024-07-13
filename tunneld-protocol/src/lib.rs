@@ -1,5 +1,5 @@
 pub mod pb {
-	tonic::include_proto!("message");
+    tonic::include_proto!("message");
 }
 
 // before connectrpc releases rust version, we validate the message by ourselves
