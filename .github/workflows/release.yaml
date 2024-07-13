@@ -71,7 +71,7 @@ jobs:
       RUST_BACKTRACE: 1
     strategy:
       matrix:
-        build: [ linux, linux-arm, macos, win-msvc, win-gnu, win32-msvc ]
+        build: [ linux, linux-arm, macos ]
         include:
           - build: linux
             os: ubuntu-latest
@@ -85,18 +85,6 @@ jobs:
             os: macos-latest
             rust: stable
             target: x86_64-apple-darwin
-          - build: win-msvc
-            os: windows-latest
-            rust: nightly
-            target: x86_64-pc-windows-msvc
-          - build: win-gnu
-            os: windows-latest
-            rust: nightly-x86_64-gnu
-            target: x86_64-pc-windows-gnu
-          - build: win32-msvc
-            os: windows-latest
-            rust: nightly
-            target: i686-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -164,16 +152,9 @@ jobs:
           mkdir -p "$staging"
 
           cp {README.md,LICENSE} "$staging/"
-
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp target/${{ matrix.target }}/release/tunneld.exe target/${{ matrix.target }}/release/tunnel.exe "$staging/"
-            7z a "$staging.zip" "$staging"
-            echo "ASSET=$staging.zip" >> $GITHUB_ENV
-          else
-            cp target/${{ matrix.target }}/release/tunneld target/${{ matrix.target }}/release/tunnel "$staging/"
-            tar czf "$staging.tar.gz" "$staging"
-            echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
-          fi
+          cp target/${{ matrix.target }}/release/tunneld target/${{ matrix.target }}/release/tunnel "$staging/"
+          tar czf "$staging.tar.gz" "$staging"
+          echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
 
       - name: Upload release archive
         uses: softprops/action-gh-release@v2
