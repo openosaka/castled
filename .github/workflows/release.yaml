@@ -21,8 +21,10 @@ jobs:
       contents: write
     env:
       # Set to force version number, e.g., when no tag exists.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ARTIFACT_VERSION: TEST-0.0.1
     steps:
+      - uses: actions/checkout@v4
       - name: Create artifacts directory
         run: mkdir artifacts
 
@@ -32,21 +34,14 @@ jobs:
           echo "ARTIFACT_VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
           echo "version is: ${{ env.ARTIFACT_VERSION }}"
 
-      - name: Create GitHub release
-        id: release
-        # create a release with the tag name as the release name
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ env.ARTIFACT_VERSION }}
-          name: ${{ env.ARTIFACT_VERSION }}
-          allowUpdates: true
-          token: ${{secrets.GITHUB_TOKEN}}
-
-      - name: Save release upload URL to artifact
-        run: echo "${{ steps.release.outputs.upload_url }}" > artifacts/release-upload-url
-
       - name: Save version number to artifact
         run: echo "${{ env.ARTIFACT_VERSION }}" > artifacts/release-version
+
+      - name: Create release
+        run: |
+          gh release create ${{ env.ARTIFACT_VERSION }} \
+            -t "Release ${{ env.ARTIFACT_VERSION }}" \
+            --generate-notes
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
