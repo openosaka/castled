@@ -1,5 +1,17 @@
-use crate::data_server::DataServer;
-use crate::Config;
+use crate::event::ClientEventResponse;
+use crate::protocol::pb::{traffic_to_server, TrafficToServer};
+use crate::protocol::validate::validate_register_req;
+use crate::shutdown::ShutdownListener;
+use crate::{bridge, event, shutdown};
+use crate::{
+    io::CancellableReceiver,
+    protocol::pb::{
+        control::Payload,
+        tunnel::Config::{Http, Tcp, Udp},
+        tunnel_service_server::{TunnelService, TunnelServiceServer},
+        Command, Control, InitPayload, RegisterReq, TrafficToClient, WorkPayload,
+    },
+};
 use anyhow::Context as _;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -12,21 +24,10 @@ use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server as GrpcServer, Request, Response, Status, Streaming};
 use tracing::{error, info};
-use tunneld_pkg::bridge;
-use tunneld_pkg::event::{self, ClientEventResponse};
-use tunneld_pkg::io::CancellableReceiver;
-use tunneld_pkg::shutdown::{self, ShutdownListener};
-use tunneld_protocol::pb::{
-    control::Payload,
-    tunnel::Config::Http,
-    tunnel::Config::Tcp,
-    tunnel::Config::Udp,
-    tunnel_service_server::{TunnelService, TunnelServiceServer},
-    Command, Control, InitPayload, RegisterReq, TrafficToClient, WorkPayload,
-};
-use tunneld_protocol::pb::{traffic_to_server, TrafficToServer};
-use tunneld_protocol::validate::validate_register_req;
 use uuid::Uuid;
+
+use super::data_server::DataServer;
+use super::Config;
 
 type GrpcResult<T> = Result<T, Status>;
 type GrpcResponse<T> = GrpcResult<Response<T>>;
@@ -91,7 +92,7 @@ impl Server {
     ///
     /// ```no_run
     /// async fn run_server() {
-    ///     let server = tunneld_server::Server::new(tunneld_server::Config{
+    ///     let server = tunneld::server::Server::new(tunneld::server::Config{
     ///         control_port: 8610,
     ///         vhttp_port: 8611,
     ///         ..Default::default()
@@ -455,14 +456,15 @@ impl TunnelService for ControlHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::EntrypointConfig;
     use tokio::time::sleep;
 
     #[tokio::test]
     async fn test_server() {
-        let server = Server::new(crate::Config {
+        let server = Server::new(Config {
             control_port: 8610,
             vhttp_port: 8611,
-            entrypoint: crate::EntrypointConfig {
+            entrypoint: EntrypointConfig {
                 domain: vec!["example.com".to_string()],
                 ..Default::default()
             },

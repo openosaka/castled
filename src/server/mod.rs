@@ -2,10 +2,11 @@ mod control_server;
 mod data_server;
 mod tunnel;
 pub use control_server::Server;
-use tunneld_pkg::event;
 
 use std::net::IpAddr;
 use std::ops::RangeInclusive;
+
+use crate::event;
 
 #[derive(Debug)]
 pub struct Config {

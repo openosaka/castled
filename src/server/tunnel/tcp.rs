@@ -1,4 +1,9 @@
-use crate::tunnel::BridgeResult;
+use crate::{
+    event,
+    io::{StreamingReader, StreamingWriter, VecWrapper},
+    server::tunnel::BridgeResult,
+    util::create_tcp_listener,
+};
 use anyhow::Context as _;
 use tokio::{
     io::{self, AsyncWriteExt as _},
@@ -9,11 +14,6 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tracing::{debug, error};
-use tunneld_pkg::{
-    event,
-    io::{StreamingReader, StreamingWriter, VecWrapper},
-    util::create_tcp_listener,
-};
 
 use super::SocketCreator;
 

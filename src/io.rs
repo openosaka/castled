@@ -1,4 +1,7 @@
 use crate::bridge::BridgeData;
+use crate::protocol::pb::traffic_to_server;
+use crate::protocol::pb::TrafficToClient;
+use crate::protocol::pb::TrafficToServer;
 use futures::ready;
 use futures::Stream;
 use std::task::{Context, Poll};
@@ -7,7 +10,6 @@ use tokio::{io, sync::mpsc::Sender};
 use tokio_util::sync::CancellationToken;
 use tokio_util::sync::PollSender;
 use tracing::debug;
-use tunneld_protocol::pb::{traffic_to_server, TrafficToClient, TrafficToServer};
 
 /// A wrapper around mpsc::Receiver that cancels the CancellationToken when dropped.
 pub struct CancellableReceiver<T> {

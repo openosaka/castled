@@ -1,8 +1,16 @@
-use crate::tunnel::{
-    create_socket,
-    http::{DynamicRegistry, FixedRegistry, Http},
-    tcp::Tcp,
-    udp::Udp,
+use crate::{
+    event::{self, ClientEventResponse, Payload},
+    shutdown::ShutdownListener,
+};
+
+use super::{
+    tunnel::{
+        create_socket,
+        http::{DynamicRegistry, FixedRegistry, Http},
+        tcp::Tcp,
+        udp::Udp,
+    },
+    EntrypointConfig,
 };
 use bytes::Bytes;
 use std::sync::Arc;
@@ -13,8 +21,6 @@ use tokio::{
 };
 use tonic::Status;
 use tracing::info;
-use tunneld_pkg::event::{self, Payload};
-use tunneld_pkg::{event::ClientEventResponse, shutdown::ShutdownListener};
 
 /// DataServer is responsible for handling the data transfer
 /// between user connection and Grpc Server(of Control Server).
@@ -23,11 +29,11 @@ pub(crate) struct DataServer {
     // which is used different subdomains or domains, they still use the same port.
     http_tunnel: Http,
     http_registry: DynamicRegistry,
-    entrypoint_config: crate::EntrypointConfig,
+    entrypoint_config: EntrypointConfig,
 }
 
 impl DataServer {
-    pub(crate) fn new(vhttp_port: u16, entrypoint_config: crate::EntrypointConfig) -> Self {
+    pub(crate) fn new(vhttp_port: u16, entrypoint_config: EntrypointConfig) -> Self {
         let http_registry = DynamicRegistry::new();
         Self {
             http_registry: http_registry.clone(),

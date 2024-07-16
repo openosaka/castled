@@ -4,8 +4,10 @@ use clap::Parser;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use tunneld_pkg::debug::setup_logging;
-use tunneld_server::{Config, Server};
+use tunneld::{
+    debug::setup_logging,
+    server::{Config, EntrypointConfig, Server},
+};
 
 #[derive(Parser, Debug, Default)]
 struct Args {
@@ -64,7 +66,7 @@ async fn main() {
     let server = Server::new(Config {
         control_port: args.control_port,
         vhttp_port: args.vhttp_port,
-        entrypoint: tunneld_server::EntrypointConfig {
+        entrypoint: EntrypointConfig {
             domain: args.domain,
             ip: args.ip,
             vhttp_behind_proxy_tls: args.vhttp_behind_proxy_tls,

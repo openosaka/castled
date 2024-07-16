@@ -1,14 +1,14 @@
 use std::ops::RangeInclusive;
 
+use crate::{
+    bridge::{self, DataSenderBridge, IdDataSenderBridge},
+    event,
+};
 use anyhow::Context as _;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
-use tunneld_pkg::{
-    bridge::{self, DataSenderBridge, IdDataSenderBridge},
-    event,
-};
 use uuid::Uuid;
 
 pub(crate) mod http;
