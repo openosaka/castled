@@ -2,7 +2,7 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-/// IdBridge is id with [`Bridge`].
+/// IdDataSenderBridge is id with [`DataSenderBridge`].
 pub struct IdDataSenderBridge {
     pub id: Bytes,
     pub inner: DataSenderBridge,
@@ -15,7 +15,7 @@ pub struct IdDataSenderBridge {
 pub struct DataSenderBridge {
     /// BridgeChan is used for sending data to data server.
     chan: DataSender,
-    /// when the server receives [`tunneld_protocol::pb::traffic_to_server::Action::Close`] action from [`tunneld_protocol::pb::tunnel_service_server::TunnelService::data`] streaming,
+    /// when the server receives [`crate::protocol::pb::traffic_to_server::Action::Close`] action from [`crate::protocol::pb::tunnel_service_server::TunnelService::data`] streaming,
     /// the server will cancel the bridge.
     cancel: CancellationToken,
 }
@@ -48,10 +48,10 @@ impl DataSenderBridge {
 /// DataSender is the sender holden by control server to send data to data server.
 ///
 /// this channel has two purposes:
-/// 1. when the server receives [`tunneld_protocol::pb::traffic_to_server::Action::Start`] action from [`tunneld_protocol::pb::tunnel_service_server::TunnelService::data`] streaming,
-/// the server will send [`BridgeChanData::DataSender`] through this channel,
-/// 2. when the server receives [`tunneld_protocol::pb::traffic_to_server::Action::Sending`],
-/// the server will send [`BridgeChanData::Data`] through this channel.
+/// 1. when the server receives [`crate::protocol::pb::traffic_to_server::Action::Start`] action from [`crate::protocol::pb::tunnel_service_server::TunnelService::data`] streaming,
+/// the server will send [`BridgeData::Sender`] through this channel,
+/// 2. when the server receives [`crate::protocol::pb::traffic_to_server::Action::Sending`],
+/// the server will send [`BridgeData::Data`] through this channel.
 pub type DataSender = mpsc::Sender<BridgeData>;
 
 /// BridgeData is the data of the `BridgeChan`.

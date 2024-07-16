@@ -38,7 +38,7 @@ type DataStream = Pin<Box<dyn Stream<Item = GrpcResult<TrafficToClient>> + Send>
 ///
 /// We treat the control server is grpc server as well, in the concept,
 /// they are same thing.
-/// Although the grpc server provides a [`tunneld_protocol::pb::tunnel_service_server::TunnelService::data`],
+/// Although the grpc server provides a [`crate::protocol::pb::tunnel_service_server::TunnelService::data`],
 /// it's similar to the data server(a little), but in the `data` function body,
 /// the most of work is to forward the data from client to data server.
 /// We can understand this is a tunnel between the client and the data server.
@@ -57,7 +57,7 @@ pub struct Server {
 
     /// shutdown is the shutdown listener of the server.
     /// when the shutdown signal is received, shutdown the server
-    /// by [`tunneld_pkg::shutdown::Shutdown::notify`].
+    /// by [`crate::shutdown::Shutdown::notify`].
     shutdown: shutdown::Shutdown,
 
     /// handler is the grpc handler of the control server.
@@ -92,7 +92,7 @@ impl Server {
     ///
     /// ```no_run
     /// async fn run_server() {
-    ///     let server = tunneld::server::Server::new(tunneld::server::Config{
+    ///     let server = castled::server::Server::new(castled::server::Config{
     ///         control_port: 8610,
     ///         vhttp_port: 8611,
     ///         ..Default::default()
@@ -333,7 +333,7 @@ impl TunnelService for ControlHandler {
 
     type DataStream = DataStream;
 
-    /// data implements the grpc [`tunneld_protocol::pb::tunnel_service_server::TunnelService::data`].
+    /// data implements the grpc [`crate::protocol::pb::tunnel_service_server::TunnelService::data`].
     ///
     /// The data function is the core of the control server,
     /// it forwards the data between the client and the data server.

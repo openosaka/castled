@@ -16,12 +16,12 @@ cleanup() {
 trap cleanup EXIT
 
 # Start the tunnel server
-exec ./target/debug/tunneld &
+exec ./target/debug/castled &
 server_pid=$!
 wait_port 6610
 
 # Start the tunnel client
-exec ./target/debug/tunnel tcp 12345 --remote-port 9992 &
+exec ./target/debug/castle tcp 12345 --remote-port 9992 &
 client_pid=$!
 wait_port 9992
 

@@ -1,6 +1,6 @@
-# Tunneld
+# Castle
 
-Tunneld is a simple tunnel based on GRPC that allows you to expose your local services to the internet,
+Castle is a simple tunnel based on GRPC that allows you to expose your local services to the internet,
 but it's **mainly designed for 🌟testing and ✨development purposes**.
 
 It resolves the problem of the traffic inside k8s reach your local services, the great

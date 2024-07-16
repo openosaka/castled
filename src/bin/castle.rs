@@ -1,9 +1,5 @@
 use bytes::Bytes;
-use clap::{Parser, Subcommand};
-use std::net::{SocketAddr, ToSocketAddrs};
-use tokio::{net::lookup_host, signal};
-use tracing::info;
-use tunneld::{
+use castled::{
     client::{
         tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel},
         Client, TunnelFuture,
@@ -11,6 +7,10 @@ use tunneld::{
     debug::setup_logging,
     shutdown,
 };
+use clap::{Parser, Subcommand};
+use std::net::{SocketAddr, ToSocketAddrs};
+use tokio::{net::lookup_host, signal};
+use tracing::info;
 
 #[derive(Parser)]
 struct Args {
@@ -68,7 +68,7 @@ enum Commands {
     },
 }
 
-const TUNNEL_NAME: &str = "tunneld-client";
+const TUNNEL_NAME: &str = "castle-client";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

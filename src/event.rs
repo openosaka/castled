@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::Status;
 
 /// ClientEvent is used to communicate between the control server and data server.
-/// When the control server receives a tunneld client request, eventually it will
+/// When the control server receives a client request, eventually it will
 /// send a ClientEvent to the data server if no error occurs.
 pub struct ClientEvent {
     // the payload of the event.

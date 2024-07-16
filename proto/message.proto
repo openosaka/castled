@@ -106,8 +106,8 @@ message Tunnel {
 //
 // these three fields are exclusive.
 message HTTPConfig {
-  // the server's public domain is https://tunneld.dev,
-  // you may configure a subdomain https://monitor.tunneld.dev,
+  // the server's public domain is https://castled.dev,
+  // you may configure a subdomain https://monitor.castled.dev,
   // then the request matches the subdomain will be forwarded to the related
   // tunnel.
   //

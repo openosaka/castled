@@ -15,11 +15,11 @@ build:
 
 .PHONY: run-server
 run-server: build
-	RUST_LOG=INFO ./target/debug/tunneld --domain localhost --ip 127.0.0.1
+	RUST_LOG=INFO ./target/debug/castled --domain localhost --ip 127.0.0.1
 
 .PHONY: run-client
 run-client: build
-	TOKIO_CONSOLE_BIND=127.0.0.1:6670 RUST_LOG=debug ./target/debug/tunnel tcp 12345 --remote-port 9991
+	TOKIO_CONSOLE_BIND=127.0.0.1:6670 RUST_LOG=debug ./target/debug/castle tcp 12345 --remote-port 9991
 
 .PHONY: e2e
 e2e: build
@@ -31,3 +31,15 @@ e2e: build
 	./tests/e2e/test_http_tunnel_with_domain.sh
 	./tests/e2e/test_http_tunnel_with_subdomain.sh
 	./tests/e2e/test_http_tunnel_with_given_port.sh
+
+NEW_CRATE_VERSION="0.0.1-alpha.1"
+
+.PHONY: check-version
+check-version:
+	@VERSION_IN_CARGO=$$(grep -E '^version = ".*"' Cargo.toml | sed -E 's/version = "(.*)"/\1/'); \
+	if [ "$${VERSION_IN_CARGO}" != "$(NEW_CRATE_VERSION)" ]; then \
+		echo "Error: Version in Cargo.toml ($${VERSION_IN_CARGO}) does not match expected version ($(NEW_CRATE_VERSION))"; \
+		exit 1; \
+	else \
+		echo "Version in Cargo.toml matches expected version ($(NEW_CRATE_VERSION))"; \
+	fi
