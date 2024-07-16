@@ -77,13 +77,22 @@ impl Client {
                 _ = shutdown => {
                     debug!("cancelling tcp tunnel");
                 }
-                _ = run_tunnel => {
-                    info!("close tunnel");
+                result = run_tunnel =>  match result {
+                    Ok(_) => {
+                        info!("tunnel closed");
+                    },
+                    Err(err) => {
+                        error!(err = ?err, "tunnel closed unexpectedly");
+                    },
                 }
             }
         });
 
-        Ok(entrypoint_rx.await?)
+        let entrypoint = entrypoint_rx
+            .await
+            .context("failed to start tunnel, check the log")?;
+
+        Ok(entrypoint)
     }
 
     /// wait to receive first init command from the server.

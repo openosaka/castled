@@ -4,6 +4,7 @@ use crate::protocol::pb::TrafficToClient;
 use crate::protocol::pb::TrafficToServer;
 use futures::ready;
 use futures::Stream;
+use std::fmt::Debug;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use tokio::{io, sync::mpsc::Sender};
@@ -105,15 +106,6 @@ pub trait WriteDataWrapper<T>: Send {
     fn wrap_shutdown(&self) -> T;
 }
 
-impl<T: Send> StreamingWriter<T> {
-    pub fn new(sender: Sender<T>, wrapper: Box<dyn WriteDataWrapper<T>>) -> Self {
-        Self {
-            sender: PollSender::new(sender),
-            wrapper,
-        }
-    }
-}
-
 pub struct TrafficToServerWrapper {
     connection_id: String,
 }
@@ -164,76 +156,104 @@ impl WriteDataWrapper<TrafficToServer> for TrafficToServerWrapper {
     }
 }
 
+impl<T: Send + Debug> StreamingWriter<T> {
+    pub fn new(sender: Sender<T>, wrapper: Box<dyn WriteDataWrapper<T>>) -> Self {
+        Self {
+            sender: PollSender::new(sender),
+            wrapper,
+        }
+    }
+
+    fn poll_write_impl(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::result::Result<usize, std::io::Error>> {
+        debug!("writing {} bytes to streaming", buf.len());
+
+        if buf.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
+
+        match ready!(self.sender.poll_reserve(cx)) {
+            Ok(_) => {
+                let wrapped_buf = self.wrapper.wrap_write(buf);
+                if let Err(err) = self.sender.send_item(wrapped_buf) {
+                    debug!("failed to send data: {:?}", err);
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "failed to send data",
+                    )));
+                }
+            }
+            Err(e) => {
+                debug!("failed to send data: {:?}", e);
+            }
+        }
+
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush_impl(
+        &self,
+        _cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), std::io::Error>> {
+        debug!("flushing streaming writer");
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown_impl(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), std::io::Error>> {
+        debug!("shutting down streaming writer");
+
+        match ready!(self.sender.poll_reserve(cx)) {
+            Ok(_) => {
+                let shutdown_buf = self.wrapper.wrap_shutdown();
+                if let Err(err) = self.sender.send_item(shutdown_buf) {
+                    debug!("failed to send data: {:?}", err);
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "failed to send data",
+                    )));
+                }
+            }
+            Err(err) => {
+                return Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("failed to shutdown: {:?}", err),
+                )));
+            }
+        }
+
+        Poll::Ready(Ok(()))
+    }
+}
+
 macro_rules! generate_async_write_impl {
     ($type:ty) => {
         impl tokio::io::AsyncWrite for StreamingWriter<$type> {
             fn poll_write(
                 mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
+                cx: &mut Context<'_>,
                 buf: &[u8],
             ) -> Poll<std::result::Result<usize, std::io::Error>> {
-                debug!("writing {} bytes to streaming", buf.len());
-
-                // if the buffer is empty, return Ok(0) means the write operation is done
-                if buf.len() == 0 {
-                    return Poll::Ready(Ok(0));
-                }
-
-                match ready!(self.sender.poll_reserve(cx)) {
-                    Ok(_) => {
-                        let buf = self.wrapper.wrap_write(buf);
-                        if let Err(err) = self.sender.send_item(buf) {
-                            debug!("failed to send data: {:?}", err);
-                            return Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "failed to send data",
-                            )));
-                        }
-                    }
-                    Err(e) => {
-                        debug!("failed to send data: {:?}", e);
-                    }
-                }
-
-                Poll::Ready(Ok(buf.len()))
+                self.poll_write_impl(cx, buf)
             }
 
             fn poll_flush(
                 self: std::pin::Pin<&mut Self>,
-                _cx: &mut std::task::Context<'_>,
+                cx: &mut Context<'_>,
             ) -> Poll<std::result::Result<(), std::io::Error>> {
-                debug!("flushing streaming writer");
-
-                // our writer writes data to the buf synchronously, so we don't need to flush
-                Poll::Ready(Ok(()))
+                self.poll_flush_impl(cx)
             }
 
             fn poll_shutdown(
                 mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
+                cx: &mut Context<'_>,
             ) -> Poll<std::result::Result<(), std::io::Error>> {
-                debug!("shutting down streaming writer");
-
-                match ready!(self.sender.poll_reserve(cx)) {
-                    Ok(_) => {
-                        let buf = self.wrapper.wrap_shutdown();
-                        if let Err(err) = self.sender.send_item(buf) {
-                            debug!("failed to send data: {:?}", err);
-                            return Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "failed to send data",
-                            )));
-                        }
-                    }
-                    Err(err) => {
-                        return Poll::Ready(Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("failed to shutdown: {:?}", err),
-                        )));
-                    }
-                }
-
-                Poll::Ready(Ok(()))
+                self.poll_shutdown_impl(cx)
             }
         }
     };
