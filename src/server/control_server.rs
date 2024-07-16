@@ -92,7 +92,7 @@ impl Server {
     ///
     /// ```no_run
     /// async fn run_server() {
-    ///     let server = castle::server::Server::new(castle::server::Config{
+    ///     let server = castled::server::Server::new(castled::server::Config{
     ///         control_port: 8610,
     ///         vhttp_port: 8611,
     ///         ..Default::default()

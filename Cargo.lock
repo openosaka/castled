@@ -233,8 +233,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a12916984aab3fa6e39d655a33e09c0071eb36d6ab3aea5c2d78551f1df6d952"
 
 [[package]]
-name = "castle"
-version = "0.1.1-alpha.1"
+name = "castled"
+version = "0.0.1-alpha.1"
 dependencies = [
  "anyhow",
  "async-trait",

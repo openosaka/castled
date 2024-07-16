@@ -37,7 +37,7 @@ impl Client {
     /// Creates a new `Client` instance with the specified control address.
     ///
     /// ```
-    /// let client = castle::client::Client::new("127.0.0.1:6100".parse().unwrap());
+    /// let client = castled::client::Client::new("127.0.0.1:6100".parse().unwrap());
     /// ```
     pub fn new(addr: SocketAddr) -> Self {
         Self { control_addr: addr }
@@ -48,8 +48,8 @@ impl Client {
     ///
     /// ```no_run
     /// use std::net::SocketAddr;
-    /// use castle::shutdown::Shutdown;
-    /// use castle::client::{
+    /// use castled::shutdown::Shutdown;
+    /// use castled::client::{
     ///     Client,
     ///     tunnel::new_tcp_tunnel,
     /// };

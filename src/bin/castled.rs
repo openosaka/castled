@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use castle::{
+use castled::{
     debug::setup_logging,
     server::{Config, EntrypointConfig, Server},
 };

@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use castle::{
+use castled::{
     client::{
         tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel},
         Client, TunnelFuture,

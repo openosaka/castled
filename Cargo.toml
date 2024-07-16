@@ -1,6 +1,6 @@
 [package]
-name = "castle"
-version = "0.1.1-alpha.1"
+name = "castled"
+version = "0.0.1-alpha.1"
 edition = "2021"
 authors = ["rrylee1994@gmail.com"]
 license = "MIT"
@@ -11,7 +11,7 @@ description = "Best tunnel for development and kubernetes"
 include = ["src/**/*", "proto/message.proto",  "LICENSE", "README.md", "build.rs"]
 
 [lib]
-name = "castle"
+name = "castled"
 path = "src/lib.rs"
 
 [dependencies]
