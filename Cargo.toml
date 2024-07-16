@@ -2,6 +2,13 @@
 name = "tunneld"
 version = "0.1.0"
 edition = "2021"
+authors = ["rrylee1994@gmail.com"]
+license = "MIT"
+build = "build.rs"
+repository = "https://github.com/openosaka/tunneld"
+readme = "README.md"
+description = "Best tunnel for development and kubernetes"
+include = ["src/**/*", "LICENSE", "README.md", "build.rs"]
 
 [lib]
 name = "tunneld"
