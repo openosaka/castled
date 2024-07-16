@@ -8,7 +8,7 @@ build = "build.rs"
 repository = "https://github.com/openosaka/tunneld"
 readme = "README.md"
 description = "Best tunnel for development and kubernetes"
-include = ["src/**/*", "LICENSE", "README.md", "build.rs"]
+include = ["src/**/*", "proto/message.proto",  "LICENSE", "README.md", "build.rs"]
 
 [lib]
 name = "tunneld"
