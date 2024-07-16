@@ -31,6 +31,7 @@ e2e: build
 	./tests/e2e/test_http_tunnel_with_domain.sh
 	./tests/e2e/test_http_tunnel_with_subdomain.sh
 	./tests/e2e/test_http_tunnel_with_given_port.sh
+	./tests/e2e/test_udp_tunnel_to_google_dns.sh
 
 NEW_CRATE_VERSION="0.0.1-alpha.1"
 

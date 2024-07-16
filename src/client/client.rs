@@ -78,6 +78,7 @@ impl Client {
                 if let Err(err) = result {
                     error!(err = ?err, "failed to handle tunnel");
                 }
+                sm.trigger_shutdown(())?;
             }
         }
         sm.wait_shutdown_complete().await;
