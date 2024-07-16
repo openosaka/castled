@@ -1,13 +1,13 @@
 use std::net::IpAddr;
 
+use castle::{
+    debug::setup_logging,
+    server::{Config, EntrypointConfig, Server},
+};
 use clap::Parser;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use tunneld::{
-    debug::setup_logging,
-    server::{Config, EntrypointConfig, Server},
-};
 
 #[derive(Parser, Debug, Default)]
 struct Args {
@@ -25,7 +25,7 @@ struct Args {
     #[arg(long, required = false)]
     domain: Vec<String>,
 
-    /// The IP addresses of the tunneld server.
+    /// The IP addresses of the castle server.
     #[arg(long, required = false)]
     ip: Vec<IpAddr>,
 

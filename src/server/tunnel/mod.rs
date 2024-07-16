@@ -26,7 +26,7 @@ pub(crate) struct BridgeResult {
 /// init_data_sender_bridge creates a bridge between the control server and data server.
 ///
 /// In this function, it has been sent the bridge to the control server,
-/// and wait to receive the first message which is [`tunneld_pkg::bridge::BridgeData::Sender`] from the control server.
+/// and wait to receive the first message which is [`crate::bridge::BridgeData::Sender`] from the control server.
 pub(crate) async fn init_data_sender_bridge(
     user_incoming_chan: mpsc::Sender<event::UserIncoming>,
 ) -> anyhow::Result<BridgeResult> {

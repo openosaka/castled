@@ -3,7 +3,7 @@ set -x
 
 rm -f actual.txt expected.txt || true
 
-data="Hello, Tunneld!"
+data="Hello, Castle!"
 
 # Function to clean up processes
 cleanup() {
@@ -16,14 +16,14 @@ cleanup() {
 trap cleanup EXIT
 
 # Start the tunnel server
-exec ./target/debug/tunneld &
+exec ./target/debug/castled &
 server_pid=$!
 
 # Give the server some time to start
 sleep 1
 
 # Start the tunnel client
-exec ./target/debug/tunnel tcp 12348 --remote-port 9992 &
+exec ./target/debug/castle tcp 12348 --remote-port 9992 &
 client_pid=$!
 
 # Start the nc TCP server

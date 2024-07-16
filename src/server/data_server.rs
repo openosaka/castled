@@ -25,7 +25,7 @@ use tracing::info;
 /// DataServer is responsible for handling the data transfer
 /// between user connection and Grpc Server(of Control Server).
 pub(crate) struct DataServer {
-    // tunneld provides a vhttp server for responding requests to the tunnel
+    // castled provides a vhttp server for responding requests to the tunnel
     // which is used different subdomains or domains, they still use the same port.
     http_tunnel: Http,
     http_registry: DynamicRegistry,

@@ -6,9 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 // use crate::{free_port, is_port_listening};
 use bytes::Bytes;
-use tokio::time::sleep;
-use tokio_util::sync::CancellationToken;
-use tunneld::{
+use castle::{
     client::{
         tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel, Tunnel},
         Client,
@@ -16,6 +14,8 @@ use tunneld::{
     server::{Config, EntrypointConfig, Server},
     shutdown::ShutdownListener,
 };
+use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,

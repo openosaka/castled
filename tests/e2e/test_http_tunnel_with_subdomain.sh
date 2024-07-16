@@ -19,18 +19,18 @@ cleanup() {
 trap cleanup EXIT
 
 # Start the tunnel server
-exec $root_dir/target/debug/tunneld &
+exec $root_dir/target/debug/castled &
 server_pid=$!
 wait_port 6610
 
 # Start the tunnel client
-exec $root_dir/target/debug/tunnel http 13346 --subdomain foo &
+exec $root_dir/target/debug/castle http 13346 --subdomain foo &
 client_pid=$!
 
 sleep 0.5
 
 # test can't bind to the same subdomain
-$root_dir/target/debug/tunnel http 6666 --subdomain foo
+$root_dir/target/debug/castle http 6666 --subdomain foo
 error_code=$?
 if [[ $error_code -eq 0 ]]; then
 	echo "Test failed: Expected non-zero error code, got $error_code"
@@ -42,19 +42,19 @@ exec $cur_dir/ping.py 13346 &
 http_server_pid1=$!
 wait_port 13346
 
-response=$(curl -s -H "Host: foo.example" http://localhost:6611/ping?query=tunneld)
-if [[ $response != "pong=tunneld" ]]; then
-	echo "Test failed: Response is not pong=tunneld"
+response=$(curl -s -H "Host: foo.example" http://localhost:6611/ping?query=castled)
+if [[ $response != "pong=castled" ]]; then
+	echo "Test failed: Response is not pong=castled"
 	exit 1
 fi
 
 # kill the client and register again
 kill -SIGINT $client_pid
 sleep 0.5
-exec $root_dir/target/debug/tunnel http 13346 --subdomain foo &
+exec $root_dir/target/debug/castle http 13346 --subdomain foo &
 client_pid=$!
 
-exec $root_dir/target/debug/tunnel http 13347 --subdomain bar &
+exec $root_dir/target/debug/castle http 13347 --subdomain bar &
 client_pid2=$!
 exec $cur_dir/ping.py 13347 &
 http_server_pid2=$!
@@ -63,12 +63,12 @@ wait_port 13347
 
 response=$(curl -s -H "Host: foo.example" http://localhost:6611/ping?query=server1)
 if [[ $response != "pong=server1" ]]; then
-	echo "Test failed: Response is not pong=tunneld"
+	echo "Test failed: Response is not pong=castled"
 	exit 1
 fi
 
 response=$(curl -s -H "Host: bar.example" http://localhost:6611/ping?query=server2)
 if [[ $response != "pong=server2" ]]; then
-	echo "Test failed: Response is not pong=tunneld"
+	echo "Test failed: Response is not pong=castled"
 	exit 1
 fi

@@ -23,7 +23,7 @@ use crate::{
 
 use super::tunnel::Tunnel;
 
-/// Client represents a tunneld client that can register tunnels with the server.
+/// Client represents a castle client that can register tunnels with the server.
 pub struct Client {
     control_addr: SocketAddr,
 }
@@ -37,7 +37,7 @@ impl Client {
     /// Creates a new `Client` instance with the specified control address.
     ///
     /// ```
-    /// let client = tunneld::client::Client::new("127.0.0.1:6100".parse().unwrap());
+    /// let client = castle::client::Client::new("127.0.0.1:6100".parse().unwrap());
     /// ```
     pub fn new(addr: SocketAddr) -> Self {
         Self { control_addr: addr }
@@ -48,8 +48,8 @@ impl Client {
     ///
     /// ```no_run
     /// use std::net::SocketAddr;
-    /// use tunneld::shutdown::Shutdown;
-    /// use tunneld::client::{
+    /// use castle::shutdown::Shutdown;
+    /// use castle::client::{
     ///     Client,
     ///     tunnel::new_tcp_tunnel,
     /// };

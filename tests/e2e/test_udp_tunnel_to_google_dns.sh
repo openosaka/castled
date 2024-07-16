@@ -13,11 +13,11 @@ cleanup() {
 
 trap cleanup EXIT
 
-exec ./target/debug/tunneld &
+exec ./target/debug/castled &
 server_pid=$!
 wait_port 6610
 
-exec ./target/debug/tunnel udp 53 --remote-port 10053 --local-addr 8.8.8.8 &
+exec ./target/debug/castle udp 53 --remote-port 10053 --local-addr 8.8.8.8 &
 client_pid=$!
 wait_port_on_udp 10053
 

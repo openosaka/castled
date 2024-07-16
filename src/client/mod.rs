@@ -1,4 +1,4 @@
-/// The rust client library for the tunneld project.
+/// The rust client library for the castle.
 #[allow(clippy::module_inception)]
 mod client;
 pub use client::*;

@@ -15,11 +15,11 @@ build:
 
 .PHONY: run-server
 run-server: build
-	RUST_LOG=INFO ./target/debug/tunneld --domain localhost --ip 127.0.0.1
+	RUST_LOG=INFO ./target/debug/castled --domain localhost --ip 127.0.0.1
 
 .PHONY: run-client
 run-client: build
-	TOKIO_CONSOLE_BIND=127.0.0.1:6670 RUST_LOG=debug ./target/debug/tunnel tcp 12345 --remote-port 9991
+	TOKIO_CONSOLE_BIND=127.0.0.1:6670 RUST_LOG=debug ./target/debug/castle tcp 12345 --remote-port 9991
 
 .PHONY: e2e
 e2e: build

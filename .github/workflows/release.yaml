@@ -22,7 +22,7 @@ jobs:
     env:
       # Set to force version number, e.g., when no tag exists.
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ARTIFACT_VERSION: TEST-0.0.1
+      ARTIFACT_VERSION: v0.0.1-alpha.1
     steps:
       - uses: actions/checkout@v4
       - name: Create artifacts directory
@@ -143,11 +143,11 @@ jobs:
       - name: Build archive
         shell: bash
         run: |
-          staging="tunneld-${{ env.RELEASE_VERSION }}-${{ matrix.target }}"
+          staging="castle-${{ env.RELEASE_VERSION }}-${{ matrix.target }}"
           mkdir -p "$staging"
 
           cp {README.md,LICENSE} "$staging/"
-          cp target/${{ matrix.target }}/release/tunneld target/${{ matrix.target }}/release/tunnel "$staging/"
+          cp target/${{ matrix.target }}/release/castled target/${{ matrix.target }}/release/castle "$staging/"
           tar czf "$staging.tar.gz" "$staging"
           echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
 
@@ -168,9 +168,23 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Get release download URL
+        uses: actions/download-artifact@v4
+        with:
+          name: artifacts
+          path: artifacts
+      - name: Set release upload URL and release version
+        shell: bash
+        run: |
+          release_version="$(cat artifacts/release-version)"
+          if [[ "$release_version" == v* ]]; then
+            release_version="${release_version:1}"
+          fi
+          echo "RELEASE_VERSION=$release_version" >> $GITHUB_ENV
+          echo "release version: $RELEASE_VERSION"
       - name: Install cargo-release
         run: cargo install cargo-release
       - name: release dry-run
-        run: cargo release
+        run: cargo release ${{ env.RELEASE_VERSION }}
       - name: release
-        run: cargo release --execute
+        run: cargo release ${{ env.RELEASE_VERSION }} --execute --no-confirm
