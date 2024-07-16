@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
-use futures::Future;
-use std::{net::SocketAddr, pin::Pin};
+use async_shutdown::ShutdownSignal;
+use std::net::SocketAddr;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-use tonic::{transport::Channel, Streaming};
+use tonic::{transport::Channel, Response, Status, Streaming};
 use tracing::{debug, error, info, instrument, span};
 
 use tokio::{
     io::{self, AsyncRead, AsyncWrite, AsyncWriteExt},
     net::{TcpStream, UdpSocket},
+    select,
     sync::{mpsc, oneshot},
 };
 
@@ -18,20 +19,15 @@ use crate::{
         tunnel_service_client::TunnelServiceClient, Command, Control, RegisterReq, TrafficToClient,
         TrafficToServer,
     },
-    select_with_shutdown, shutdown,
 };
 
 use super::tunnel::Tunnel;
 
 /// Client represents a castle client that can register tunnels with the server.
+#[derive(Clone)]
 pub struct Client {
     control_addr: SocketAddr,
 }
-
-/// TunnelFuture is a future that represents the tunnel handler.
-///
-/// The tunnel future is responsible for handling the tunnel process.
-pub type TunnelFuture<'a> = Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + Send + 'a>>;
 
 impl Client {
     /// Creates a new `Client` instance with the specified control address.
@@ -48,48 +44,102 @@ impl Client {
     ///
     /// ```no_run
     /// use std::net::SocketAddr;
-    /// use castled::shutdown::Shutdown;
     /// use castled::client::{
     ///     Client,
     ///     tunnel::new_tcp_tunnel,
     /// };
+    /// use async_shutdown::ShutdownManager;
     ///
-    /// let client = Client::new("127.0.0.1:6100".parse().unwrap());
-    /// let tunnel = new_tcp_tunnel(String::from("my-tunnel"), SocketAddr::from(([127, 0, 0, 1], 8971)), 8080);
-    /// let shutdown_listener = Shutdown::new().listen();
-    /// let (handler, entrypoint_rx) = client.register_tunnel(tunnel, shutdown_listener).unwrap();
-    /// tokio::spawn(async move {
-    ///     let entrypoint = entrypoint_rx.await.unwrap();
-    /// });
-    /// // handler.await;
+    /// async fn run() {
+    ///     let client = Client::new("127.0.0.1:6100".parse().unwrap());
+    ///     let tunnel = new_tcp_tunnel(String::from("my-tunnel"), SocketAddr::from(([127, 0, 0, 1], 8971)), 8080);
+    ///     let shutdown = ShutdownManager::new();
+    ///     let entrypoint = client.start_tunnel(tunnel, shutdown.wait_shutdown_triggered()).await.unwrap();
+    ///     println!("entrypoint: {:?}", entrypoint);
+    /// }
     /// ```
-    pub fn register_tunnel(
-        &self,
+    pub async fn start_tunnel(
+        self,
         tunnel: Tunnel,
-        shutdown_listener: shutdown::ShutdownListener,
-    ) -> Result<(TunnelFuture, oneshot::Receiver<Vec<String>>)> {
+        shutdown: ShutdownSignal<()>,
+    ) -> Result<Vec<String>> {
         let (entrypoint_tx, entrypoint_rx) = oneshot::channel();
-        let handler = self.handle_tunnel(
-            shutdown_listener,
-            tunnel.inner,
-            tunnel.local_endpoint,
-            Some(|entrypoint: Vec<String>| {
-                if let Err(err) = entrypoint_tx.send(entrypoint) {
-                    error!(err = ?err, "failed to send entrypoint the receiver may be dropped, check your code");
+
+        tokio::spawn(async move {
+            let run_tunnel = self.handle_tunnel(
+                shutdown.clone(),
+                tunnel,
+                Some(move |entrypoint| {
+                    let _ = entrypoint_tx.send(entrypoint);
+                }),
+            );
+            tokio::select! {
+                _ = shutdown => {
+                    debug!("cancelling tcp tunnel");
                 }
-            }),
-        );
-        Ok((Box::pin(handler), entrypoint_rx))
+                _ = run_tunnel => {
+                    info!("close tunnel");
+                }
+            }
+        });
+
+        Ok(entrypoint_rx.await?)
     }
 
-    /// Handles the tunnel registration process.
-    async fn handle_tunnel(
+    /// wait to receive first init command from the server.
+    /// we treat the tunnel has been established successfully after we receive the init command.
+    async fn wait_until_registered(
         &self,
-        shutdown_listener: shutdown::ShutdownListener,
+        shutdown: ShutdownSignal<()>,
+        control_stream: &mut Streaming<Control>,
+    ) -> Result<Vec<String>> {
+        select! {
+            _ = shutdown => {
+                debug!("cancelling tcp tunnel");
+                return Err(Status::cancelled("tunnel registration cancelled").into());
+            }
+            result = control_stream.next() => {
+                let result = result.unwrap();
+                if result.is_err() {
+                    return Err(result.unwrap_err().into());
+                }
+                let control = result.unwrap();
+                match Command::try_from(control.command) {
+                    Ok(Command::Init) => {
+                        match control.payload {
+                            Some(Payload::Init(init)) => {
+                                info!(
+                                    tunnel_id = init.tunnel_id,
+                                    entrypoint = ?init.assigned_entrypoint,
+                                    "tunnel registered successfully",
+                                );
+                                return Ok(init.assigned_entrypoint);
+                            }
+                            Some(Payload::Work(_)) => {
+                                error!("unexpected work command");
+                            }
+                            None => {
+                                error!("missing payload in init command");
+                            }
+                        }
+                    },
+                    Ok(cmd) => {
+                        error!(cmd = ?cmd, "unexpected command");
+                    },
+                    Err(err) => {
+                        error!(err = ?err, "unexpected command");
+                    },
+                }
+            }
+        }
+        Err(anyhow::anyhow!("failed to register tunnel"))
+    }
+
+    async fn register_tunnel(
+        &self,
+        rpc_client: &mut TunnelServiceClient<Channel>,
         tunnel: pb::Tunnel,
-        local_endpoint: SocketAddr,
-        hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
-    ) -> Result<()> {
+    ) -> Result<Response<Streaming<Control>>> {
         let span = span!(
             tracing::Level::INFO,
             "register_tunnel",
@@ -97,46 +147,82 @@ impl Client {
         );
         let _enter = span.enter();
 
-        let is_udp = tunnel.r#type == Type::Udp as i32;
-        let mut rpc_client = self.new_rpc_client().await?;
-        let register = rpc_client.register(RegisterReq {
-            tunnel: Some(tunnel),
-        });
+        rpc_client
+            .register(RegisterReq {
+                tunnel: Some(tunnel),
+            })
+            .await
+            .map_err(|err| err.into())
+    }
 
-        select_with_shutdown!(register, shutdown_listener.done(), register_resp, {
-            match register_resp {
-                Err(e) => {
-                    error!(err = ?e, "failed to register tunnel");
-                    Err(e.into())
-                }
-                Ok(register_resp) => {
-                    self.handle_control_stream(
-                        shutdown_listener,
-                        rpc_client,
-                        register_resp,
-                        local_endpoint,
-                        is_udp,
-                        hook,
-                    )
-                    .await
-                }
+    /// Handles the tunnel registration process.
+    #[allow(dead_code)]
+    async fn handle_tunnel(
+        &self,
+        shutdown: ShutdownSignal<()>,
+        tunnel: Tunnel,
+        hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
+    ) -> Result<()> {
+        let mut rpc_client = self.new_rpc_client().await?;
+        let is_udp = tunnel.inner.r#type == Type::Udp as i32;
+        let register = self.register_tunnel(&mut rpc_client, tunnel.inner);
+
+        tokio::select! {
+            _ = shutdown.clone() => {
+                Ok(())
             }
-        })
+            register_resp = register => {
+                let register_resp = register_resp?;
+                self.handle_control_stream(
+                    shutdown.clone(),
+                    rpc_client,
+                    register_resp,
+                    tunnel.local_endpoint,
+                    is_udp,
+                    hook,
+                ).await
+            }
+        }
     }
 
     /// Handles the control stream from the server.
-    #[instrument(skip(self, shutdown_listener, rpc_client, register_resp, hook))]
+    #[instrument(skip(self, shutdown, rpc_client, register_resp, hook))]
     async fn handle_control_stream(
         &self,
-        shutdown_listener: shutdown::ShutdownListener,
+        shutdown: ShutdownSignal<()>,
         rpc_client: TunnelServiceClient<Channel>,
         register_resp: tonic::Response<Streaming<Control>>,
         local_endpoint: SocketAddr,
         is_udp: bool,
-        mut hook: Option<impl FnOnce(Vec<String>)>,
+        mut hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
     ) -> Result<()> {
         let mut control_stream = register_resp.into_inner();
-        let mut initialized = false;
+
+        let entrypoint = self
+            .wait_until_registered(shutdown.clone(), &mut control_stream)
+            .await?;
+        if let Some(hook) = hook.take() {
+            hook(entrypoint);
+        }
+
+        self.start_streaming(
+            shutdown,
+            &mut control_stream,
+            rpc_client,
+            local_endpoint,
+            is_udp,
+        )
+        .await
+    }
+
+    async fn start_streaming(
+        &self,
+        shutdown: ShutdownSignal<()>,
+        control_stream: &mut Streaming<Control>,
+        rpc_client: TunnelServiceClient<Channel>,
+        local_endpoint: SocketAddr,
+        is_udp: bool,
+    ) -> Result<()> {
         loop {
             tokio::select! {
                 result = control_stream.next() => {
@@ -151,72 +237,46 @@ impl Client {
                     let control = result.unwrap();
                     match Command::try_from(control.command) {
                         Ok(Command::Init) => {
-                            if initialized {
-                                error!("received duplicate init command");
-                                break;
-                            }
-                            match control.payload {
-                                Some(Payload::Init(init)) => {
-                                    initialized = true;
-                                    info!(
-                                        tunnel_id = init.tunnel_id,
-                                        entrypoint = ?init.assigned_entrypoint,
-                                        "tunnel registered successfully",
-                                    );
-                                    if let Some(hook) = hook.take() {
-                                        hook(init.assigned_entrypoint.clone());
-                                    }
-                                    continue; // the only path to success.
-                                }
-                                Some(Payload::Work(_)) => {
-                                    error!("unexpected work command");
-                                }
-                                None => {
-                                    error!("missing payload in init command");
-                                }
-                            }
-                            break;
+                            error!("tunnel has been initialized, should not receive init command again");
+                            return Err(anyhow::anyhow!("tunnel has been initialized"));
                         },
                         Ok(Command::Work) => {
-                            if !initialized {
-                                error!("received work command before init command");
-                                break;
-                            }
                             match control.payload {
                                 Some(Payload::Init(_)) => {
                                     error!("unexpected init command");
                                 }
                                 Some(Payload::Work(work)) => {
                                     debug!("received work command, starting to forward traffic");
-                                    if let Err(e) = handle_work_traffic(
+                                    if let Err(err) = handle_work_traffic(
                                         rpc_client.clone() /* cheap clone operation */,
                                         &work.connection_id,
                                         local_endpoint,
                                         is_udp,
                                     ).await {
-                                        error!(err = ?e, "failed to handle work traffic");
+                                        error!(err = ?err, "failed to handle work traffic");
                                     } else {
                                         continue; // the only path to success.
                                     }
                                 }
                                 None => {
                                     error!("missing payload in work command");
+                                    return Err(anyhow::anyhow!("missing payload in work command"));
                                 }
                             }
                             break;
                         },
                         _ => {
                             error!(command = %control.command, "unexpected command");
+                            return Err(anyhow::anyhow!("unexpected command"));
                         }
                     }
                 }
-                _ = shutdown_listener.done() => {
+                _ = shutdown.clone() => {
                     debug!("cancelling tcp tunnel");
                     return Ok(());
                 }
             }
         }
-
         Ok(())
     }
 
