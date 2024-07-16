@@ -1,7 +1,5 @@
 use crate::bridge::BridgeData;
 use crate::event::{self, IncomingEventSender};
-use crate::get_with_shutdown;
-use crate::shutdown::ShutdownListener;
 use crate::util::create_tcp_listener;
 
 use super::{init_data_sender_bridge, BridgeResult};
@@ -23,6 +21,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, info_span, Instrument as _};
 
 static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
@@ -56,17 +55,24 @@ impl Http {
         Self { port, lookup }
     }
 
-    pub(crate) async fn serve(self, shutdown: ShutdownListener) -> anyhow::Result<()> {
-        let shutdown = shutdown.clone();
-        let vhttp_listener =
-            get_with_shutdown!(create_tcp_listener(self.port), shutdown.cancelled())?;
+    pub(crate) async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        // let vhttp_listener =
+        //     get_with_shutdown!(create_tcp_listener(self.port), shutdown.cancelled())?;
+        let vhttp_listener = tokio::select! {
+            _ = shutdown.cancelled() => {
+                return Ok(());
+            },
+            Ok(listener) = create_tcp_listener(self.port) => {
+                listener
+            }
+        };
 
-        self.serve_with_listener(vhttp_listener, shutdown);
+        self.serve_with_listener(vhttp_listener, shutdown.clone());
 
         Ok(())
     }
 
-    pub(crate) fn serve_with_listener(self, listener: TcpListener, shutdown: ShutdownListener) {
+    pub(crate) fn serve_with_listener(self, listener: TcpListener, shutdown: CancellationToken) {
         let this = Arc::new(self);
         let http1_builder = Arc::new(http1::Builder::new());
         let vhttp_handler = async move {

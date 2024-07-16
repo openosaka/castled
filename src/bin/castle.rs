@@ -1,3 +1,4 @@
+use async_shutdown::ShutdownManager;
 use bytes::Bytes;
 use castled::{
     client::{
@@ -5,7 +6,6 @@ use castled::{
         Client,
     },
     debug::setup_logging,
-    shutdown,
 };
 use clap::{Parser, Subcommand};
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -80,10 +80,9 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let shutdown = shutdown::Shutdown::new();
-
     let client = Client::new(args.server_addr);
-    let entrypoint;
+    let tunnel;
+    let shutdown: ShutdownManager<()> = ShutdownManager::new();
 
     match args.command {
         Commands::Tcp {
@@ -92,16 +91,11 @@ async fn main() -> anyhow::Result<()> {
             local_addr,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            entrypoint = client
-                .start_tunnel(
-                    new_tcp_tunnel(
-                        DEFAULT_TCP_TUNNEL_NAME.to_string(),
-                        local_endpoint,
-                        remote_port,
-                    ),
-                    shutdown.listen(),
-                )
-                .await?;
+            tunnel = new_tcp_tunnel(
+                DEFAULT_TCP_TUNNEL_NAME.to_string(),
+                local_endpoint,
+                remote_port,
+            );
         }
         Commands::Udp {
             port,
@@ -109,16 +103,11 @@ async fn main() -> anyhow::Result<()> {
             local_addr,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            entrypoint = client
-                .start_tunnel(
-                    new_udp_tunnel(
-                        DEFAULT_UDP_TUNNEL_NAME.to_string(),
-                        local_endpoint,
-                        remote_port,
-                    ),
-                    shutdown.listen(),
-                )
-                .await?;
+            tunnel = new_udp_tunnel(
+                DEFAULT_UDP_TUNNEL_NAME.to_string(),
+                local_endpoint,
+                remote_port,
+            );
         }
         Commands::Http {
             port,
@@ -129,21 +118,20 @@ async fn main() -> anyhow::Result<()> {
             random_subdomain,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            entrypoint = client
-                .start_tunnel(
-                    new_http_tunnel(
-                        DEFAULT_HTTP_TUNNEL_NAME.to_string(),
-                        local_endpoint,
-                        Bytes::from(domain.unwrap_or_default()),
-                        Bytes::from(subdomain.unwrap_or_default()),
-                        random_subdomain,
-                        remote_port.unwrap_or(0),
-                    ),
-                    shutdown.listen(),
-                )
-                .await?
+            tunnel = new_http_tunnel(
+                DEFAULT_HTTP_TUNNEL_NAME.to_string(),
+                local_endpoint,
+                Bytes::from(domain.unwrap_or_default()),
+                Bytes::from(subdomain.unwrap_or_default()),
+                random_subdomain,
+                remote_port.unwrap_or(0),
+            );
         }
     }
+
+    let entrypoint = client
+        .start_tunnel(tunnel, shutdown.clone().wait_shutdown_triggered())
+        .await?;
 
     info!("Entrypoint: {:?}", entrypoint);
 
@@ -152,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
         panic!("Failed to listen for the ctrl-c signal: {:?}", e);
     }
     info!("Received ctrl-c signal. Shutting down...");
-    shutdown.notify();
+    shutdown.wait_shutdown_complete();
 
     Ok(())
 }

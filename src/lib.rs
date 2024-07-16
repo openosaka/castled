@@ -7,4 +7,3 @@ pub(crate) mod util;
 pub mod client;
 pub mod debug;
 pub mod server;
-pub mod shutdown;

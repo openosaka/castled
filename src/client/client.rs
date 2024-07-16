@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use async_shutdown::{ShutdownManager, ShutdownSignal};
+use futures::Future;
 use std::net::SocketAddr;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{transport::Channel, Response, Status, Streaming};
@@ -18,7 +20,6 @@ use crate::{
         tunnel_service_client::TunnelServiceClient, Command, Control, RegisterReq, TrafficToClient,
         TrafficToServer,
     },
-    shutdown,
 };
 
 use super::tunnel::Tunnel;
@@ -44,7 +45,6 @@ impl Client {
     ///
     /// ```no_run
     /// use std::net::SocketAddr;
-    /// use castled::shutdown::Shutdown;
     /// use castled::client::{
     ///     Client,
     ///     tunnel::new_tcp_tunnel,
@@ -53,25 +53,35 @@ impl Client {
     /// async fn run() {
     ///     let client = Client::new("127.0.0.1:6100".parse().unwrap());
     ///     let tunnel = new_tcp_tunnel(String::from("my-tunnel"), SocketAddr::from(([127, 0, 0, 1], 8971)), 8080);
-    ///     let shutdown_listener = Shutdown::new().listen();
-    ///     let entrypoint = client.start_tunnel(tunnel, shutdown_listener).await.unwrap();
+    ///     let entrypoint = client.start_tunnel(tunnel, tokio::signal::ctrl_c()).await.unwrap();
     ///     println!("entrypoint: {:?}", entrypoint);
     /// }
     /// ```
-    pub async fn start_tunnel(
-        self,
-        tunnel: Tunnel,
-        shutdown_listener: shutdown::ShutdownListener,
-    ) -> Result<Vec<String>> {
+    pub async fn start_tunnel(self, tunnel: Tunnel, shutdown: impl Future) -> Result<Vec<String>> {
         let (entrypoint_tx, entrypoint_rx) = oneshot::channel();
-        self.handle_tunnel(
-            shutdown_listener,
+        let sm = ShutdownManager::new();
+
+        let run_tunnel = self.handle_tunnel(
+            sm.wait_shutdown_triggered(),
             tunnel,
             Some(move |entrypoint| {
                 let _ = entrypoint_tx.send(entrypoint);
             }),
-        )
-        .await?;
+        );
+
+        select! {
+            _ = shutdown => {
+                debug!("cancelling tcp tunnel");
+                sm.trigger_shutdown(())?;
+            }
+            result = run_tunnel => {
+                if let Err(err) = result {
+                    error!(err = ?err, "failed to handle tunnel");
+                }
+            }
+        }
+        sm.wait_shutdown_complete().await;
+
         entrypoint_rx.await.map_err(Into::into)
     }
 
@@ -79,11 +89,11 @@ impl Client {
     /// we treat the tunnel has been established successfully after we receive the init command.
     async fn wait_until_registered(
         &self,
-        shutdown_listener: shutdown::ShutdownListener,
+        shutdown: ShutdownSignal<()>,
         control_stream: &mut Streaming<Control>,
     ) -> Result<Vec<String>> {
         select! {
-            _ = shutdown_listener.done() => {
+            _ = shutdown => {
                 debug!("cancelling tcp tunnel");
                 return Err(Status::cancelled("tunnel registration cancelled").into());
             }
@@ -148,7 +158,7 @@ impl Client {
     #[allow(dead_code)]
     async fn handle_tunnel(
         &self,
-        shutdown_listener: shutdown::ShutdownListener,
+        shutdown: ShutdownSignal<()>,
         tunnel: Tunnel,
         hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
     ) -> Result<()> {
@@ -157,13 +167,13 @@ impl Client {
         let register = self.register_tunnel(&mut rpc_client, tunnel.inner);
 
         tokio::select! {
-            _ = shutdown_listener.done() => {
+            _ = shutdown.clone() => {
                 Ok(())
             }
             register_resp = register => {
                 let register_resp = register_resp?;
                 self.handle_control_stream(
-                    shutdown_listener,
+                    shutdown.clone(),
                     rpc_client,
                     register_resp,
                     tunnel.local_endpoint,
@@ -175,10 +185,10 @@ impl Client {
     }
 
     /// Handles the control stream from the server.
-    #[instrument(skip(self, shutdown_listener, rpc_client, register_resp, hook))]
+    #[instrument(skip(self, shutdown, rpc_client, register_resp, hook))]
     async fn handle_control_stream(
         &self,
-        shutdown_listener: shutdown::ShutdownListener,
+        shutdown: ShutdownSignal<()>,
         rpc_client: TunnelServiceClient<Channel>,
         register_resp: tonic::Response<Streaming<Control>>,
         local_endpoint: SocketAddr,
@@ -188,14 +198,14 @@ impl Client {
         let mut control_stream = register_resp.into_inner();
 
         let entrypoint = self
-            .wait_until_registered(shutdown_listener.clone(), &mut control_stream)
+            .wait_until_registered(shutdown.clone(), &mut control_stream)
             .await?;
         if let Some(hook) = hook.take() {
             hook(entrypoint);
         }
 
         self.start_streaming(
-            shutdown_listener,
+            shutdown,
             &mut control_stream,
             rpc_client,
             local_endpoint,
@@ -206,7 +216,7 @@ impl Client {
 
     async fn start_streaming(
         &self,
-        shutdown_listener: shutdown::ShutdownListener,
+        shutdown: ShutdownSignal<()>,
         control_stream: &mut Streaming<Control>,
         rpc_client: TunnelServiceClient<Channel>,
         local_endpoint: SocketAddr,
@@ -260,7 +270,7 @@ impl Client {
                         }
                     }
                 }
-                _ = shutdown_listener.done() => {
+                _ = shutdown.clone() => {
                     debug!("cancelling tcp tunnel");
                     return Ok(());
                 }

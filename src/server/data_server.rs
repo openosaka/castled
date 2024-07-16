@@ -1,7 +1,4 @@
-use crate::{
-    event::{self, ClientEventResponse, Payload},
-    shutdown::ShutdownListener,
-};
+use crate::event::{self, ClientEventResponse, Payload};
 
 use super::{
     tunnel::{
@@ -12,6 +9,7 @@ use super::{
     },
     EntrypointConfig,
 };
+use async_shutdown::ShutdownSignal;
 use bytes::Bytes;
 use std::sync::Arc;
 use tokio::{
@@ -19,6 +17,7 @@ use tokio::{
     spawn,
     sync::mpsc,
 };
+use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tracing::info;
 
@@ -44,14 +43,21 @@ impl DataServer {
 
     pub(crate) async fn listen(
         self,
-        shutdown: ShutdownListener,
+        shutdown: ShutdownSignal<()>,
         mut receiver: mpsc::Receiver<event::ClientEvent>,
     ) -> anyhow::Result<()> {
         let this = Arc::new(self);
         let http_tunnel = this.http_tunnel.clone();
         // start the vhttp tunnel, all the http requests to the vhttp server(with the vhttp_port)
         // will be handled by this http_tunnel.
-        http_tunnel.serve(shutdown.clone()).await?;
+        let cancel_w = CancellationToken::new();
+        let cancel = cancel_w.clone();
+        let shutdown_listener = shutdown.clone();
+        tokio::spawn(async move {
+            shutdown_listener.await;
+            cancel_w.cancel();
+        });
+        http_tunnel.serve(cancel).await?;
 
         while let Some(event) = receiver.recv().await {
             match event.payload {
@@ -122,18 +128,18 @@ impl DataServer {
                     let subdomain_c = subdomain.clone();
                     let domain_c = domain.clone();
                     let domain_c2 = domain.clone();
-                    let resp_status = this
-                        .register_http(
+                    let resp_status = shutdown
+                        .wrap_cancel(this.register_http(
+                            event.close_listener.clone(),
                             domain,
                             &mut subdomain,
                             random_subdomain,
                             &mut port,
                             event.incoming_events,
-                            ShutdownListener::from_cancellation(event.close_listener.clone()),
-                        )
+                        ))
                         .await;
                     let this = Arc::clone(&this);
-                    if let Some(status) = resp_status {
+                    if let Ok(Some(status)) = resp_status {
                         event
                             .resp
                             .send(ClientEventResponse::registered_failed(status))
@@ -174,12 +180,12 @@ impl DataServer {
 
     async fn register_http(
         &self,
+        shutdown: CancellationToken,
         domain: Bytes,
         subdomain: &mut Bytes,
         random_subdomain: bool,
         port: &mut u16,
         conn_event_chan: mpsc::Sender<event::UserIncoming>,
-        shutdown: ShutdownListener,
     ) -> Option<Status> {
         if !domain.is_empty() {
             // forward the http request from this domain to control server.

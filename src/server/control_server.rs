@@ -1,8 +1,7 @@
 use crate::event::ClientEventResponse;
 use crate::protocol::pb::{traffic_to_server, TrafficToServer};
 use crate::protocol::validate::validate_register_req;
-use crate::shutdown::ShutdownListener;
-use crate::{bridge, event, shutdown};
+use crate::{bridge, event};
 use crate::{
     io::CancellableReceiver,
     protocol::pb::{
@@ -13,6 +12,7 @@ use crate::{
     },
 };
 use anyhow::Context as _;
+use async_shutdown::{ShutdownManager, ShutdownSignal};
 use bytes::Bytes;
 use dashmap::DashMap;
 use futures::{Future, StreamExt};
@@ -56,9 +56,7 @@ pub struct Server {
     event_bus: DataServer,
 
     /// shutdown is the shutdown listener of the server.
-    /// when the shutdown signal is received, shutdown the server
-    /// by [`crate::shutdown::Shutdown::notify`].
-    shutdown: shutdown::Shutdown,
+    shutdown: ShutdownManager<()>,
 
     /// handler is the grpc handler of the control server.
     handler: ControlHandler,
@@ -67,14 +65,14 @@ pub struct Server {
 impl Server {
     /// Create a new server instance.
     pub fn new(config: Config) -> Self {
-        let shutdown = shutdown::Shutdown::new();
+        let shutdown: ShutdownManager<()> = ShutdownManager::new();
         let (event_tx, event_rx) = mpsc::channel(1024);
 
         let server = GrpcServer::builder()
             .http2_keepalive_interval(Some(tokio::time::Duration::from_secs(60)))
             .http2_keepalive_timeout(Some(tokio::time::Duration::from_secs(3)));
         let events = DataServer::new(config.vhttp_port, config.entrypoint);
-        let handler = ControlHandler::new(shutdown.listen(), event_tx);
+        let handler = ControlHandler::new(shutdown.wait_shutdown_triggered(), event_tx);
 
         Self {
             control_port: config.control_port,
@@ -109,8 +107,8 @@ impl Server {
             .context("invalid control_port")
             .unwrap();
 
-        let shutdown_listener_control_server = self.shutdown.listen();
-        let shutdown_listener_event_bus = self.shutdown.listen();
+        let shutdown_listener_control_server = self.shutdown.wait_shutdown_triggered();
+        let shutdown_listener_event_bus = self.shutdown.wait_shutdown_triggered();
 
         let event_bus = self.event_bus;
         tokio::spawn(async move {
@@ -125,7 +123,9 @@ impl Server {
         let run_control_server = async move {
             control_server
                 .add_service(TunnelServiceServer::new(self.handler))
-                .serve_with_shutdown(addr, shutdown_listener_control_server)
+                .serve_with_shutdown(addr, async {
+                    shutdown_listener_control_server.await;
+                })
                 .await
         };
 
@@ -140,8 +140,7 @@ impl Server {
             }
         }
 
-        // when close shutdown_listener, the control server will start to shutdown.
-        self.shutdown.notify();
+        self.shutdown.trigger_shutdown(())?;
 
         Ok(())
     }
@@ -153,11 +152,11 @@ struct ControlHandler {
     event_tx: mpsc::Sender<event::ClientEvent>,
     bridges: Arc<DashMap<Bytes, bridge::DataSenderBridge>>,
     close_sender_notifiers: Arc<DashMap<Bytes, CancellationToken>>,
-    shutdown: ShutdownListener,
+    shutdown: ShutdownSignal<()>,
 }
 
 impl ControlHandler {
-    fn new(shutdown: ShutdownListener, event_tx: mpsc::Sender<event::ClientEvent>) -> Self {
+    fn new(shutdown: ShutdownSignal<()>, event_tx: mpsc::Sender<event::ClientEvent>) -> Self {
         Self {
             bridges: Arc::new(DashMap::new()),
             close_sender_notifiers: Arc::new(DashMap::new()),
@@ -287,7 +286,7 @@ impl TunnelService for ControlHandler {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = shutdown_listener.done() => {
+                    _ = shutdown_listener.clone() => {
                         info!("server closed, close the control stream");
                         return;
                     }
@@ -351,7 +350,7 @@ impl TunnelService for ControlHandler {
             let mut stream_started = false;
             loop {
                 tokio::select! {
-                    _ = shutdown_listener.done() => { break }
+                    _ = shutdown_listener.clone() => { break }
                     Some(traffic) = inbound_stream.next() => {
                         match traffic {
                             Ok(traffic) => {

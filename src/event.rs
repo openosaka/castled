@@ -14,7 +14,7 @@ pub struct ClientEvent {
     // the data server will send back the status of the control server
     // after it handles this event.
     pub resp: oneshot::Sender<ClientEventResponse>,
-    // when client exits, the server will cancel the listener.
+    // when client exits, the control server will cancel the listener.
     pub close_listener: CancellationToken,
     // data server sends events to this channel continuously.
     pub incoming_events: IncomingEventSender,

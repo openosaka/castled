@@ -12,7 +12,6 @@ use castled::{
         Client,
     },
     server::{Config, EntrypointConfig, Server},
-    shutdown::ShutdownListener,
 };
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -49,7 +48,7 @@ async fn client_register_tcp() {
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
                     remote_port,
                 ),
-                ShutdownListener::from_cancellation(close_client),
+                close_client.cancelled(),
             )
             .await;
         assert!(entrypoint.is_ok());
@@ -96,7 +95,7 @@ async fn client_register_and_close_then_register_again() {
                     SocketAddr::from(([127, 0, 0, 1], 8971)),
                     remote_port,
                 ),
-                ShutdownListener::from_cancellation(close_client),
+                close_client.cancelled(),
             )
             .await;
     });
@@ -122,7 +121,7 @@ async fn client_register_and_close_then_register_again() {
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
                     remote_port,
                 ),
-                ShutdownListener::from_cancellation(close_client),
+                close_client.cancelled(),
             )
             .await;
     });
@@ -166,7 +165,7 @@ async fn register_http_tunnel_with_subdomain() {
                 false,
                 0,
             ),
-            ShutdownListener::from_cancellation(close_client),
+            close_client.cancelled(),
         );
     });
 
@@ -433,10 +432,7 @@ async fn test_assigned_entrypoint() {
             let client_handler = tokio::spawn(async move {
                 let client = Client::new(control_addr);
                 let entrypoint = client
-                    .start_tunnel(
-                        tunnel.tunnel,
-                        ShutdownListener::from_cancellation(close_client),
-                    )
+                    .start_tunnel(tunnel.tunnel, close_client.cancelled())
                     .await;
                 assert!(entrypoint.is_ok());
                 let entrypoint = entrypoint.unwrap();
