@@ -2,7 +2,7 @@ use bytes::Bytes;
 use castled::{
     client::{
         tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel},
-        Client, TunnelFuture,
+        Client,
     },
     debug::setup_logging,
     shutdown,
@@ -68,7 +68,9 @@ enum Commands {
     },
 }
 
-const TUNNEL_NAME: &str = "castle-client";
+const DEFAULT_TCP_TUNNEL_NAME: &str = "castle-tcp";
+const DEFAULT_UDP_TUNNEL_NAME: &str = "castle-udp";
+const DEFAULT_HTTP_TUNNEL_NAME: &str = "castle-http";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -81,8 +83,7 @@ async fn main() -> anyhow::Result<()> {
     let shutdown = shutdown::Shutdown::new();
 
     let client = Client::new(args.server_addr);
-    let entrypoint_rx: tokio::sync::oneshot::Receiver<Vec<String>>;
-    let future: TunnelFuture;
+    let entrypoint;
 
     match args.command {
         Commands::Tcp {
@@ -91,10 +92,16 @@ async fn main() -> anyhow::Result<()> {
             local_addr,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            (future, entrypoint_rx) = client.register_tunnel(
-                new_tcp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port),
-                shutdown.listen(),
-            )?;
+            entrypoint = client
+                .start_tunnel(
+                    new_tcp_tunnel(
+                        DEFAULT_TCP_TUNNEL_NAME.to_string(),
+                        local_endpoint,
+                        remote_port,
+                    ),
+                    shutdown.listen(),
+                )
+                .await?;
         }
         Commands::Udp {
             port,
@@ -102,10 +109,16 @@ async fn main() -> anyhow::Result<()> {
             local_addr,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            (future, entrypoint_rx) = client.register_tunnel(
-                new_udp_tunnel(TUNNEL_NAME.to_string(), local_endpoint, remote_port),
-                shutdown.listen(),
-            )?;
+            entrypoint = client
+                .start_tunnel(
+                    new_udp_tunnel(
+                        DEFAULT_UDP_TUNNEL_NAME.to_string(),
+                        local_endpoint,
+                        remote_port,
+                    ),
+                    shutdown.listen(),
+                )
+                .await?;
         }
         Commands::Http {
             port,
@@ -116,38 +129,30 @@ async fn main() -> anyhow::Result<()> {
             random_subdomain,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            (future, entrypoint_rx) = client.register_tunnel(
-                new_http_tunnel(
-                    TUNNEL_NAME.to_string(),
-                    local_endpoint,
-                    Bytes::from(domain.unwrap_or_default()),
-                    Bytes::from(subdomain.unwrap_or_default()),
-                    random_subdomain,
-                    remote_port.unwrap_or(0),
-                ),
-                shutdown.listen(),
-            )?;
+            entrypoint = client
+                .start_tunnel(
+                    new_http_tunnel(
+                        DEFAULT_HTTP_TUNNEL_NAME.to_string(),
+                        local_endpoint,
+                        Bytes::from(domain.unwrap_or_default()),
+                        Bytes::from(subdomain.unwrap_or_default()),
+                        random_subdomain,
+                        remote_port.unwrap_or(0),
+                    ),
+                    shutdown.listen(),
+                )
+                .await?
         }
     }
 
-    tokio::spawn(async move {
-        if let Err(e) = signal::ctrl_c().await {
-            // Something really weird happened. So just panic
-            panic!("Failed to listen for the ctrl-c signal: {:?}", e);
-        }
-        info!("Received ctrl-c signal. Shutting down...");
-        shutdown.notify();
-    });
+    info!("Entrypoint: {:?}", entrypoint);
 
-    tokio::spawn(async move {
-        tokio::select! {
-            entrypoints = entrypoint_rx => {
-                info!("Entrypoints: {:?}", entrypoints);
-            }
-        }
-    });
-
-    future.await?;
+    if let Err(e) = signal::ctrl_c().await {
+        // Something really weird happened. So just panic
+        panic!("Failed to listen for the ctrl-c signal: {:?}", e);
+    }
+    info!("Received ctrl-c signal. Shutting down...");
+    shutdown.notify();
 
     Ok(())
 }

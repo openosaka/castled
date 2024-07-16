@@ -43,3 +43,7 @@ check-version:
 	else \
 		echo "Version in Cargo.toml matches expected version ($(NEW_CRATE_VERSION))"; \
 	fi
+
+.PHONY: clean
+clean:
+	rm -rf target

@@ -42,8 +42,8 @@ async fn client_register_tcp() {
 
     let client_handler = tokio::spawn(async move {
         let client = Client::new(control_addr);
-        let (handler, entrypoint_rx) = client
-            .register_tunnel(
+        let entrypoint = client
+            .start_tunnel(
                 new_tcp_tunnel(
                     "test".to_string(),
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
@@ -51,15 +51,11 @@ async fn client_register_tcp() {
                 ),
                 ShutdownListener::from_cancellation(close_client),
             )
-            .unwrap();
-
-        if let Err(err) = handler.await {
-            return Err(err);
-        }
-        let entrypoint = entrypoint_rx.await.unwrap();
+            .await;
+        assert!(entrypoint.is_ok());
+        let entrypoint = entrypoint.unwrap();
         assert_eq!(1, entrypoint.len());
         assert_eq!(entrypoint[0], format!("tcp://{}:{}", domain, remote_port));
-        Ok(())
     });
 
     // check the remote port is available
@@ -93,8 +89,8 @@ async fn client_register_and_close_then_register_again() {
     let control_addr = server.control_addr();
     let client_handler = tokio::spawn(async move {
         let client = Client::new(control_addr);
-        let (handler, _) = client
-            .register_tunnel(
+        let _ = client
+            .start_tunnel(
                 new_tcp_tunnel(
                     "test".to_string(),
                     SocketAddr::from(([127, 0, 0, 1], 8971)),
@@ -102,12 +98,7 @@ async fn client_register_and_close_then_register_again() {
                 ),
                 ShutdownListener::from_cancellation(close_client),
             )
-            .unwrap();
-
-        if let Err(err) = handler.await {
-            return Err(err);
-        }
-        Ok(())
+            .await;
     });
 
     tokio::spawn(async move {
@@ -124,8 +115,8 @@ async fn client_register_and_close_then_register_again() {
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let client = Client::new(control_addr);
-        let (handler, _) = client
-            .register_tunnel(
+        let _ = client
+            .start_tunnel(
                 new_tcp_tunnel(
                     "test".to_string(),
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
@@ -133,12 +124,7 @@ async fn client_register_and_close_then_register_again() {
                 ),
                 ShutdownListener::from_cancellation(close_client),
             )
-            .unwrap();
-
-        if let Err(err) = handler.await {
-            return Err(err);
-        }
-        Ok(())
+            .await;
     });
 
     tokio::spawn(async move {
@@ -171,24 +157,17 @@ async fn register_http_tunnel_with_subdomain() {
 
     let client_handler = tokio::spawn(async move {
         let client = Client::new(control_addr);
-        let (handler, _) = client
-            .register_tunnel(
-                new_http_tunnel(
-                    "test".to_string(),
-                    SocketAddr::from(([127, 0, 0, 1], local_port)),
-                    Bytes::from(""),
-                    Bytes::from("foo"),
-                    false,
-                    0,
-                ),
-                ShutdownListener::from_cancellation(close_client),
-            )
-            .unwrap();
-
-        if let Err(err) = handler.await {
-            return Err(err);
-        }
-        Ok(())
+        let _ = client.start_tunnel(
+            new_http_tunnel(
+                "test".to_string(),
+                SocketAddr::from(([127, 0, 0, 1], local_port)),
+                Bytes::from(""),
+                Bytes::from("foo"),
+                false,
+                0,
+            ),
+            ShutdownListener::from_cancellation(close_client),
+        );
     });
 
     sleep(tokio::time::Duration::from_millis(100)).await;
@@ -453,24 +432,19 @@ async fn test_assigned_entrypoint() {
 
             let client_handler = tokio::spawn(async move {
                 let client = Client::new(control_addr);
-                let (handler, entrypoint_rx) = client
-                    .register_tunnel(
+                let entrypoint = client
+                    .start_tunnel(
                         tunnel.tunnel,
                         ShutdownListener::from_cancellation(close_client),
                     )
-                    .unwrap();
-
-                if let Err(err) = handler.await {
-                    return Err(err);
-                }
-
-                let actual = entrypoint_rx.await;
-                assert_eq!(actual.unwrap(), tunnel.expected);
-                Ok(())
+                    .await;
+                assert!(entrypoint.is_ok());
+                let entrypoint = entrypoint.unwrap();
+                assert_eq!(entrypoint, tunnel.expected);
             });
 
             tokio::spawn(async move {
-                sleep(tokio::time::Duration::from_millis(300)).await;
+                sleep(tokio::time::Duration::from_millis(100)).await;
                 cancel_client_w.cancel();
             });
 

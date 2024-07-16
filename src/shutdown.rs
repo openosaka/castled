@@ -21,20 +21,6 @@ macro_rules! get_with_shutdown {
     }};
 }
 
-#[macro_export]
-macro_rules! select_with_shutdown {
-    ($do:expr, $shutdown:expr, $accept_pat:pat, $accept_block:block) => {
-        tokio::select! {
-            $accept_pat = $do => {
-                $accept_block
-            }
-            _ = $shutdown => {
-                return Ok(());
-            }
-        }
-    };
-}
-
 pub struct Shutdown {
     inner: CancellationToken,
 }

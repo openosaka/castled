@@ -5,7 +5,7 @@ use bytes::Bytes;
 use crate::protocol::pb::{
     self,
     tunnel::{self, Type},
-    HttpConfig, TcpConfig,
+    HttpConfig, TcpConfig, UdpConfig,
 };
 
 pub struct Tunnel {
@@ -32,7 +32,7 @@ pub fn new_udp_tunnel(name: String, local_endpoint: SocketAddr, remote_port: u16
         inner: pb::Tunnel {
             name,
             r#type: Type::Udp as i32,
-            config: Some(tunnel::Config::Tcp(TcpConfig {
+            config: Some(tunnel::Config::Udp(UdpConfig {
                 remote_port: remote_port as i32,
             })),
             ..Default::default()
