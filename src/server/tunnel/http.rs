@@ -22,6 +22,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
+use tonic::Status;
 use tracing::{debug, info, info_span, Instrument as _};
 
 static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
@@ -51,19 +52,18 @@ impl Clone for Http {
 
 impl Http {
     pub(crate) fn new(port: u16, lookup: Arc<Box<dyn LookupRequest>>) -> Self {
-        info!(port, "http server started on port");
+        info!(port, "http server starting on port");
         Self { port, lookup }
     }
 
-    pub(crate) async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
-        // let vhttp_listener =
-        //     get_with_shutdown!(create_tcp_listener(self.port), shutdown.cancelled())?;
+    pub(crate) async fn serve(self, shutdown: CancellationToken) -> Result<(), Status> {
         let vhttp_listener = tokio::select! {
             _ = shutdown.cancelled() => {
                 return Ok(());
             },
-            Ok(listener) = create_tcp_listener(self.port) => {
-                listener
+            listener = create_tcp_listener(self.port) => match listener {
+                Ok(listener) => listener,
+                Err(err) => return Err(err),
             }
         };
 

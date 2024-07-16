@@ -83,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
     let client = Client::new(args.server_addr);
     let tunnel;
     let shutdown: ShutdownManager<()> = ShutdownManager::new();
+    let wait_complete = shutdown.wait_shutdown_complete();
 
     match args.command {
         Commands::Tcp {
@@ -130,17 +131,21 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let entrypoint = client
-        .start_tunnel(tunnel, shutdown.clone().wait_shutdown_triggered())
+        .start_tunnel(tunnel, shutdown.wait_shutdown_triggered())
         .await?;
 
     info!("Entrypoint: {:?}", entrypoint);
 
-    if let Err(e) = signal::ctrl_c().await {
-        // Something really weird happened. So just panic
-        panic!("Failed to listen for the ctrl-c signal: {:?}", e);
-    }
-    info!("Received ctrl-c signal. Shutting down...");
-    shutdown.wait_shutdown_complete();
+    tokio::spawn(async move {
+        if let Err(e) = signal::ctrl_c().await {
+            // Something really weird happened. So just panic
+            panic!("Failed to listen for the ctrl-c signal: {:?}", e);
+        }
+        info!("Received ctrl-c signal. Shutting down...");
+        shutdown.trigger_shutdown(()).unwrap();
+    });
+
+    wait_complete.await;
 
     Ok(())
 }

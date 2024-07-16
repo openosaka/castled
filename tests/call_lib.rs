@@ -4,7 +4,7 @@ use crate::common::free_port;
 use crate::common::is_port_listening;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-// use crate::{free_port, is_port_listening};
+use async_shutdown::ShutdownManager;
 use bytes::Bytes;
 use castled::{
     client::{
@@ -14,7 +14,6 @@ use castled::{
     server::{Config, EntrypointConfig, Server},
 };
 use tokio::time::sleep;
-use tokio_util::sync::CancellationToken;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -35,7 +34,7 @@ async fn client_register_tcp() {
         ..Default::default()
     })
     .await;
-    let close_client = server.cancel.clone();
+    let close_client = server.cancel.clone().wait_shutdown_triggered();
     let remote_port = free_port().unwrap();
     let control_addr = server.control_addr().clone();
 
@@ -48,7 +47,7 @@ async fn client_register_tcp() {
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
                     remote_port,
                 ),
-                close_client.cancelled(),
+                close_client,
             )
             .await;
         assert!(entrypoint.is_ok());
@@ -70,7 +69,7 @@ async fn client_register_tcp() {
         server.vhttp_port,
     );
 
-    server.cancel.cancel();
+    server.cancel.trigger_shutdown(()).unwrap();
 
     let client_exit = tokio::join!(client_handler);
     assert!(client_exit.0.is_ok());
@@ -81,8 +80,8 @@ async fn client_register_and_close_then_register_again() {
     init();
     let server = start_server(Default::default()).await;
 
-    let cancel_client_w = CancellationToken::new();
-    let close_client = cancel_client_w.clone();
+    let shutdown = ShutdownManager::new();
+    let close_client = shutdown.clone();
     let remote_port = free_port().unwrap();
 
     let control_addr = server.control_addr();
@@ -95,22 +94,22 @@ async fn client_register_and_close_then_register_again() {
                     SocketAddr::from(([127, 0, 0, 1], 8971)),
                     remote_port,
                 ),
-                close_client.cancelled(),
+                close_client.wait_shutdown_triggered(),
             )
             .await;
     });
 
     tokio::spawn(async move {
         sleep(tokio::time::Duration::from_millis(300)).await;
-        cancel_client_w.cancel();
+        shutdown.trigger_shutdown(());
     });
 
     let client_exit = tokio::join!(client_handler);
     assert!(client_exit.0.is_ok());
 
     // register again with the same port
-    let cancel_client_w = CancellationToken::new();
-    let close_client = cancel_client_w.clone();
+    let shutdown = ShutdownManager::new();
+    let close_client = shutdown.clone();
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
         let client = Client::new(control_addr);
@@ -121,14 +120,14 @@ async fn client_register_and_close_then_register_again() {
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
                     remote_port,
                 ),
-                close_client.cancelled(),
+                close_client.wait_shutdown_triggered(),
             )
             .await;
     });
 
     tokio::spawn(async move {
         sleep(tokio::time::Duration::from_millis(300)).await;
-        cancel_client_w.cancel();
+        shutdown.trigger_shutdown(());
     });
 
     let client_exit = tokio::join!(client_handler);
@@ -165,7 +164,7 @@ async fn register_http_tunnel_with_subdomain() {
                 false,
                 0,
             ),
-            close_client.cancelled(),
+            close_client.wait_shutdown_triggered(),
         );
     });
 
@@ -183,7 +182,7 @@ async fn register_http_tunnel_with_subdomain() {
     let response = http_client.execute(request).await.unwrap();
     assert_eq!(response.status(), 200);
 
-    server.cancel.cancel();
+    server.cancel.trigger_shutdown(()).unwrap();
 
     let client_exit = tokio::join!(client_handler);
     assert!(client_exit.0.is_ok());
@@ -425,14 +424,14 @@ async fn test_assigned_entrypoint() {
         let server = start_server(case.entrypoint).await;
 
         for tunnel in case.tunnels {
-            let cancel_client_w = CancellationToken::new();
-            let close_client = cancel_client_w.clone();
+            let shutdown = ShutdownManager::new();
+            let close_client = shutdown.clone();
             let control_addr = server.control_addr();
 
             let client_handler = tokio::spawn(async move {
                 let client = Client::new(control_addr);
                 let entrypoint = client
-                    .start_tunnel(tunnel.tunnel, close_client.cancelled())
+                    .start_tunnel(tunnel.tunnel, close_client.wait_shutdown_triggered())
                     .await;
                 assert!(entrypoint.is_ok());
                 let entrypoint = entrypoint.unwrap();
@@ -441,7 +440,7 @@ async fn test_assigned_entrypoint() {
 
             tokio::spawn(async move {
                 sleep(tokio::time::Duration::from_millis(100)).await;
-                cancel_client_w.cancel();
+                shutdown.trigger_shutdown(()).unwrap();
             });
 
             let _ = tokio::join!(client_handler);
@@ -452,7 +451,7 @@ async fn test_assigned_entrypoint() {
 struct TestServer {
     control_port: u16,
     vhttp_port: u16,
-    cancel: CancellationToken,
+    cancel: ShutdownManager<()>,
 }
 
 impl TestServer {
@@ -470,16 +469,16 @@ async fn start_server(entrypoint_config: EntrypointConfig) -> TestServer {
         control_port,
         entrypoint: entrypoint_config,
     });
-    let cancel_w = CancellationToken::new();
-    let cancel = cancel_w.clone();
+    let shutdown = ShutdownManager::new();
+    let shutdown2 = shutdown.clone();
     tokio::spawn(async move {
-        server.run(cancel.cancelled()).await;
+        server.run(shutdown2.wait_shutdown_triggered()).await;
     });
     sleep(tokio::time::Duration::from_millis(200)).await;
 
     TestServer {
         control_port,
         vhttp_port,
-        cancel: cancel_w,
+        cancel: shutdown.clone(),
     }
 }

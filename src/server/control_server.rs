@@ -182,17 +182,21 @@ impl TunnelService for ControlHandler {
         tokio::spawn(async move {
             // wait for the entrypoint assigned by the server
             let tenant_id = Uuid::new_v4();
-            let init_command = Control {
-                command: Command::Init as i32,
-                payload: Some(Payload::Init(InitPayload {
-                    tunnel_id: tenant_id.to_string(),
-                    assigned_entrypoint: entrypoint_rx.await.unwrap(),
-                })),
-            };
-            outbound_streaming_tx_init_message
-                .send(Ok(init_command))
-                .await
-                .unwrap();
+            if let Ok(entrypoint) = entrypoint_rx.await {
+                let init_command = Control {
+                    command: Command::Init as i32,
+                    payload: Some(Payload::Init(InitPayload {
+                        tunnel_id: tenant_id.to_string(),
+                        assigned_entrypoint: entrypoint,
+                    })),
+                };
+                outbound_streaming_tx_init_message
+                    .send(Ok(init_command))
+                    .await
+                    .unwrap();
+            } else {
+                error!("failed to start the tunnel, quit the task");
+            }
         });
 
         let register_cancel = CancellationToken::new();

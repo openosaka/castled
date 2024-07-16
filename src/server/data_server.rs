@@ -19,7 +19,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
-use tracing::info;
+use tracing::{error, info};
 
 /// DataServer is responsible for handling the data transfer
 /// between user connection and Grpc Server(of Control Server).
@@ -228,8 +228,10 @@ impl DataServer {
             .serve(shutdown)
             .await
             {
+                error!(port = *port, err = ?err, "failed to start http server");
                 Some(Status::internal(err.to_string()))
             } else {
+                info!(port = *port, "http server started");
                 None
             }
         } else {

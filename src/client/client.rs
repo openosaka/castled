@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
-use async_shutdown::{ShutdownManager, ShutdownSignal};
-use futures::Future;
+use async_shutdown::ShutdownSignal;
 use std::net::SocketAddr;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{transport::Channel, Response, Status, Streaming};
@@ -49,41 +48,42 @@ impl Client {
     ///     Client,
     ///     tunnel::new_tcp_tunnel,
     /// };
+    /// use async_shutdown::ShutdownManager;
     ///
     /// async fn run() {
     ///     let client = Client::new("127.0.0.1:6100".parse().unwrap());
     ///     let tunnel = new_tcp_tunnel(String::from("my-tunnel"), SocketAddr::from(([127, 0, 0, 1], 8971)), 8080);
-    ///     let entrypoint = client.start_tunnel(tunnel, tokio::signal::ctrl_c()).await.unwrap();
+    ///     let shutdown = ShutdownManager::new();
+    ///     let entrypoint = client.start_tunnel(tunnel, shutdown.wait_shutdown_triggered()).await.unwrap();
     ///     println!("entrypoint: {:?}", entrypoint);
     /// }
     /// ```
-    pub async fn start_tunnel(self, tunnel: Tunnel, shutdown: impl Future) -> Result<Vec<String>> {
+    pub async fn start_tunnel(
+        self,
+        tunnel: Tunnel,
+        shutdown: ShutdownSignal<()>,
+    ) -> Result<Vec<String>> {
         let (entrypoint_tx, entrypoint_rx) = oneshot::channel();
-        let sm = ShutdownManager::new();
 
-        let run_tunnel = self.handle_tunnel(
-            sm.wait_shutdown_triggered(),
-            tunnel,
-            Some(move |entrypoint| {
-                let _ = entrypoint_tx.send(entrypoint);
-            }),
-        );
-
-        select! {
-            _ = shutdown => {
-                debug!("cancelling tcp tunnel");
-                sm.trigger_shutdown(())?;
-            }
-            result = run_tunnel => {
-                if let Err(err) = result {
-                    error!(err = ?err, "failed to handle tunnel");
+        tokio::spawn(async move {
+            let run_tunnel = self.handle_tunnel(
+                shutdown.clone(),
+                tunnel,
+                Some(move |entrypoint| {
+                    let _ = entrypoint_tx.send(entrypoint);
+                }),
+            );
+            tokio::select! {
+                _ = shutdown => {
+                    debug!("cancelling tcp tunnel");
                 }
-                sm.trigger_shutdown(())?;
+                _ = run_tunnel => {
+                    info!("close tunnel");
+                }
             }
-        }
-        sm.wait_shutdown_complete().await;
+        });
 
-        entrypoint_rx.await.map_err(Into::into)
+        Ok(entrypoint_rx.await?)
     }
 
     /// wait to receive first init command from the server.
