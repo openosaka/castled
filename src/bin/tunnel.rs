@@ -3,11 +3,14 @@ use clap::{Parser, Subcommand};
 use std::net::{SocketAddr, ToSocketAddrs};
 use tokio::{net::lookup_host, signal};
 use tracing::info;
-use tunneld_client::{
-    tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel},
-    TunnelFuture,
+use tunneld::{
+    client::{
+        tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel},
+        Client, TunnelFuture,
+    },
+    debug::setup_logging,
+    shutdown,
 };
-use tunneld_pkg::{debug::setup_logging, shutdown};
 
 #[derive(Parser)]
 struct Args {
@@ -77,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
 
     let shutdown = shutdown::Shutdown::new();
 
-    let client = tunneld_client::Client::new(args.server_addr);
+    let client = Client::new(args.server_addr);
     let entrypoint_rx: tokio::sync::oneshot::Receiver<Vec<String>>;
     let future: TunnelFuture;
 

@@ -1,3 +1,9 @@
+use crate::bridge::BridgeData;
+use crate::event::{self, IncomingEventSender};
+use crate::get_with_shutdown;
+use crate::shutdown::ShutdownListener;
+use crate::util::create_tcp_listener;
+
 use super::{init_data_sender_bridge, BridgeResult};
 use anyhow::{Context as _, Result};
 use bytes::{BufMut as _, Bytes};
@@ -18,11 +24,6 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info, info_span, Instrument as _};
-use tunneld_pkg::bridge::BridgeData;
-use tunneld_pkg::event::IncomingEventSender;
-use tunneld_pkg::shutdown::ShutdownListener;
-use tunneld_pkg::util::create_tcp_listener;
-use tunneld_pkg::{event, get_with_shutdown};
 
 static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
 

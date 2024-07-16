@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
+use crate::{bridge::BridgeData, event, server::tunnel::BridgeResult, util::create_udp_socket};
 use tokio::{net::UdpSocket, select, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tracing::{error, warn};
-use tunneld_pkg::{bridge::BridgeData, event, util::create_udp_socket};
-
-use crate::tunnel::BridgeResult;
 
 use super::SocketCreator;
 

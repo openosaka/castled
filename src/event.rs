@@ -49,6 +49,7 @@ impl ClientEventResponse {
 
 /// Payload is the data of the ClientEvent.
 #[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub enum Payload {
     RegisterTcp {
         port: u16,

@@ -1,15 +1,21 @@
+mod common;
+
+use crate::common::free_port;
+use crate::common::is_port_listening;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+// use crate::{free_port, is_port_listening};
 use bytes::Bytes;
-use tests::{free_port, is_port_listening};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tunneld_client::{
-    tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel, Tunnel},
-    Client,
+use tunneld::{
+    client::{
+        tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel, Tunnel},
+        Client,
+    },
+    server::{Config, EntrypointConfig, Server},
+    shutdown::ShutdownListener,
 };
-use tunneld_pkg::shutdown::ShutdownListener;
-use tunneld_server::{Config, EntrypointConfig};
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -489,7 +495,7 @@ impl TestServer {
 async fn start_server(entrypoint_config: EntrypointConfig) -> TestServer {
     let control_port = free_port().unwrap();
     let vhttp_port = free_port().unwrap();
-    let server = tunneld_server::Server::new(Config {
+    let server = Server::new(Config {
         vhttp_port,
         control_port,
         entrypoint: entrypoint_config,

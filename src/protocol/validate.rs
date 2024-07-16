@@ -1,4 +1,4 @@
-use crate::pb::{
+use super::pb::{
     tunnel::Config::Http, tunnel::Config::Tcp, tunnel::Config::Udp, tunnel::Type, RegisterReq,
 };
 use tonic::Status;

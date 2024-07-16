@@ -1,4 +1,3 @@
-use crate::tunnel::Tunnel;
 use anyhow::{Context, Result};
 use futures::Future;
 use std::{net::SocketAddr, pin::Pin};
@@ -11,15 +10,18 @@ use tokio::{
     net::{TcpStream, UdpSocket},
     sync::{mpsc, oneshot},
 };
-use tunneld_pkg::{
+
+use crate::{
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
+    protocol::pb::{
+        self, control::Payload, traffic_to_server, tunnel::Type,
+        tunnel_service_client::TunnelServiceClient, Command, Control, RegisterReq, TrafficToClient,
+        TrafficToServer,
+    },
     select_with_shutdown, shutdown,
 };
-use tunneld_protocol::pb::{
-    self, control::Payload, traffic_to_server, tunnel::Type,
-    tunnel_service_client::TunnelServiceClient, Command, Control, RegisterReq, TrafficToClient,
-    TrafficToServer,
-};
+
+use super::tunnel::Tunnel;
 
 /// Client represents a tunneld client that can register tunnels with the server.
 pub struct Client {
@@ -35,7 +37,7 @@ impl Client {
     /// Creates a new `Client` instance with the specified control address.
     ///
     /// ```
-    /// let client = tunneld_client::Client::new("127.0.0.1:6100".parse().unwrap());
+    /// let client = tunneld::client::Client::new("127.0.0.1:6100".parse().unwrap());
     /// ```
     pub fn new(addr: SocketAddr) -> Self {
         Self { control_addr: addr }
@@ -46,9 +48,11 @@ impl Client {
     ///
     /// ```no_run
     /// use std::net::SocketAddr;
-    /// use tunneld_pkg::shutdown::Shutdown;
-    /// use tunneld_client::Client;
-    /// use tunneld_client::tunnel::new_tcp_tunnel;
+    /// use tunneld::shutdown::Shutdown;
+    /// use tunneld::client::{
+    ///     Client,
+    ///     tunnel::new_tcp_tunnel,
+    /// };
     ///
     /// let client = Client::new("127.0.0.1:6100".parse().unwrap());
     /// let tunnel = new_tcp_tunnel(String::from("my-tunnel"), SocketAddr::from(([127, 0, 0, 1], 8971)), 8080);

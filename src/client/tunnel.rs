@@ -1,19 +1,21 @@
 use std::net::SocketAddr;
 
 use bytes::Bytes;
-use tunneld_protocol::pb::{
+
+use crate::protocol::pb::{
+    self,
     tunnel::{self, Type},
     HttpConfig, TcpConfig,
 };
 
 pub struct Tunnel {
-    pub(crate) inner: tunneld_protocol::pb::Tunnel,
+    pub(crate) inner: pb::Tunnel,
     pub(crate) local_endpoint: SocketAddr,
 }
 
 pub fn new_tcp_tunnel(name: String, local_endpoint: SocketAddr, remote_port: u16) -> Tunnel {
     Tunnel {
-        inner: tunneld_protocol::pb::Tunnel {
+        inner: pb::Tunnel {
             name,
             r#type: Type::Tcp as i32,
             config: Some(tunnel::Config::Tcp(TcpConfig {
@@ -27,7 +29,7 @@ pub fn new_tcp_tunnel(name: String, local_endpoint: SocketAddr, remote_port: u16
 
 pub fn new_udp_tunnel(name: String, local_endpoint: SocketAddr, remote_port: u16) -> Tunnel {
     Tunnel {
-        inner: tunneld_protocol::pb::Tunnel {
+        inner: pb::Tunnel {
             name,
             r#type: Type::Udp as i32,
             config: Some(tunnel::Config::Tcp(TcpConfig {
@@ -48,7 +50,7 @@ pub fn new_http_tunnel(
     remote_port: u16,
 ) -> Tunnel {
     Tunnel {
-        inner: tunneld_protocol::pb::Tunnel {
+        inner: pb::Tunnel {
             name,
             r#type: Type::Http as i32,
             config: Some(tunnel::Config::Http(get_http_config(
