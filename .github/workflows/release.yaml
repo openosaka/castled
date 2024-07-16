@@ -102,7 +102,7 @@ jobs:
       
       - name: compile protobuf
         run: |
-          protoc --descriptor_set_out=./tunneld-protocol/src/message.bin --proto_path=tunneld-protocol/src message.proto
+          protoc --descriptor_set_out=./proto/message.bin --proto_path=proto message.proto
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
@@ -158,3 +158,19 @@ jobs:
           files: ${{ env.ASSET }}
           tag_name: ${{ env.RELEASE_VERSION }}
 
+  release-crate:
+    name: release-crate
+    # needs: ["build-release"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cargo-release
+        run: cargo install cargo-release
+      - name: release dry-run
+        run: cargo release
+      - name: release
+        run: cargo release --execute
