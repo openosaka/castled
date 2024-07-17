@@ -12,7 +12,7 @@ on:
     # branches:
     #   - fix-releases
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+*"
+      - "v[0-9]+.[0-9]+.[0-9]*"
 jobs:
   create-release:
     name: create-release
@@ -191,8 +191,8 @@ jobs:
       - name: Install cargo-release
         run: cargo install cargo-release
       - name: release dry-run
-        run: cargo release ${{ env.RELEASE_VERSION }}
+        run: cargo release ${{ env.RELEASE_VERSION }} --no-push --no-tag
       - name: release
-        run: cargo release ${{ env.RELEASE_VERSION }} --execute --no-confirm
+        run: cargo release ${{ env.RELEASE_VERSION }} --execute --no-confirm --no-push --no-tag
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
