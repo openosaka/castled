@@ -25,6 +25,10 @@ jobs:
         env:
           VERSION: ${{ github.event.inputs.version }}
         run : |
-          make check-version NEW_CRATE_VERSION="$VERSION"
+          crate_version="${{ env.ARTIFACT_VERSION }}"
+          if [[ "$crate_version" == v* ]]; then
+            crate_version="${crate_version:1}"
+          fi
+          make check-version NEW_CRATE_VERSION="$crate_version"
           git tag -m "Release $VERSION" $VERSION
           git push origin "$VERSION"
