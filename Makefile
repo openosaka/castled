@@ -4,6 +4,8 @@ ENABLE_TOKIO_CONSOLE ?= 0
 RUSTFLAGS =
 FEATURES =
 
+IMAGE_VERSION ?= latest
+
 ifeq ($(ENABLE_TOKIO_CONSOLE), 1)
 	RUSTFLAGS +="--cfg tokio_unstable"
 	FEATURES += "debug"
@@ -12,6 +14,12 @@ endif
 .PHONY: build
 build:
 	RUSTFLAGS=$(RUSTFLAGS) cargo build $(if $(FEATURES),--features $(FEATURES))
+
+.PHONY: build-docker
+build-docker:
+	docker build -t castled:$(IMAGE_VERSION) .
+	DOCKER_BUILDKIT=1 docker build -t castled:$(IMAGE_VERSION) .
+	DOCKER_BUILDKIT=1 docker build -t castle:$(IMAGE_VERSION) .
 
 .PHONY: run-server
 run-server: build
