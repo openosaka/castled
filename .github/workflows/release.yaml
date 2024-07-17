@@ -7,36 +7,70 @@ env:
 
 on:
   workflow_dispatch:
-  push:
-    # Enable when testing release infrastructure on a branch.
-    # branches:
-    #   - fix-releases
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]*"
+    inputs:
+      version:
+        description: "New tag"
+        required: true
+        default: "v0.0.1(match the version in Cargo.toml)"
+
 jobs:
+  create-tag:
+    name: create-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Create artifacts directory
+        run: mkdir artifacts
+      - name: Create tag
+        uses: actions/github-script@v5
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/${{ github.event.inputs.version }}',
+              sha: context.sha
+            })
+      - name: Get the release version from the tag
+        env:
+          RELEASE_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          echo "RELEASE_VERSION=${{ env.RELEASE_VERSION }}" >> $GITHUB_ENV
+          echo "version is: ${{ env.RELEASE_VERSION }}"
+      - name: Save version number to artifact
+        run: echo "${{ env.RELEASE_VERSION }}" > artifacts/release-version
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: artifacts
+
   create-release:
     name: create-release
     runs-on: ubuntu-latest
+    needs:
+      - create-tag
     permissions:
       contents: write
     env:
       # Set to force version number, e.g., when no tag exists.
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # ARTIFACT_VERSION: v0.0.1-alpha.1
     steps:
       - uses: actions/checkout@v4
-      - name: Create artifacts directory
-        run: mkdir artifacts
-      - name: Get the release version from the tag
-        if: env.ARTIFACT_VERSION == ''
-        run: |
-          echo "ARTIFACT_VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-          echo "version is: ${{ env.ARTIFACT_VERSION }}"
-      - name: Save version number to artifact
-        run: echo "${{ env.ARTIFACT_VERSION }}" > artifacts/release-version
+      - name: Get release download URL
+        uses: actions/download-artifact@v4
+        with:
+          name: artifacts
+          path: artifacts
       - name: check version in Cargo.toml
         run: |
-          release_version="${{ env.ARTIFACT_VERSION }}"
+          release_version="$(cat artifacts/release-version)"
           if [[ "$release_version" == v* ]]; then
             release_version="${release_version:1}"
           fi
@@ -44,14 +78,9 @@ jobs:
           make check-version NEW_CRATE_VERSION=$release_version
       - name: Create release
         run: |
-          gh release create ${{ env.ARTIFACT_VERSION }} \
-            -t "Release ${{ env.ARTIFACT_VERSION }}" \
+          gh release create ${{ env.RELEASE_VERSION }} \
+            -t "Release ${{ env.RELEASE_VERSION }}" \
             --generate-notes
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: artifacts
-          path: artifacts
 
   build-release:
     name: build-release
@@ -134,7 +163,7 @@ jobs:
           name: artifacts
           path: artifacts
 
-      - name: Set release upload URL and release version
+      - name: Set release version
         shell: bash
         run: |
           release_version="$(cat artifacts/release-version)"
@@ -165,7 +194,7 @@ jobs:
 
   release-crate:
     name: release-crate
-    # needs: ["build-release"]
+    needs: ["build-release"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -173,12 +202,12 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Get release download URL
+      - name: Get artifacts
         uses: actions/download-artifact@v4
         with:
           name: artifacts
           path: artifacts
-      - name: Set release upload URL and release version
+      - name: Set release version
         shell: bash
         run: |
           release_version="$(cat artifacts/release-version)"
