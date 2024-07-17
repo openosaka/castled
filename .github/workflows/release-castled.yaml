@@ -249,12 +249,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: swordjin/castled:${{ env.RELEASE_VERSION }}
+          tags: swordjin/castle:${{ env.RELEASE_VERSION }}
           target: castle
       - name: Build and push castled
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: swordjin/castle:${{ env.RELEASE_VERSION }}
+          tags: swordjin/castled:${{ env.RELEASE_VERSION }}
           target: castled
       
