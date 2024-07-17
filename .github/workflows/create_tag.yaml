@@ -6,6 +6,7 @@ on:
       version:
         description: "New tag"
         required: true
+        default: "v0.0.1(match the version in Cargo.toml)"
 
 jobs:
   create-tag:
@@ -15,10 +16,12 @@ jobs:
       contents: write
     env:
       # GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # use personal access token to create tag to it can trigger other workflows
       GH_TOKEN: ${{ secrets.PAT_FOR_TAG }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # use personal access token to create tag to it can trigger other workflows
+          token: ${{ secrets.PAT_FOR_TAG }}
       - name: Create tag
         uses: actions/github-script@v5
         with:
