@@ -187,7 +187,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           files: ${{ env.ASSET }}
-          tag_name: ${{ env.RELEASE_VERSION }}
+          tag_name: castled/${{ env.RELEASE_VERSION }}
 
   release-crate:
     name: release-crate
@@ -222,8 +222,7 @@ jobs:
 
   release-docker:
     name: release-docker
-    # needs: ["build-release"]
-    needs: ["create-tag"]
+    needs: ["build-release"]
     runs-on: ubuntu-latest
     steps:
       - name: Set up QEMU
