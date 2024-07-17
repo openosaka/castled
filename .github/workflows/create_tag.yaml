@@ -17,14 +17,13 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - name: Create a new tag and push the tag
-        env:
-          VERSION: ${{ github.event.inputs.version }}
-        run : |
-          crate_version="$VERSION"
-          if [[ "$crate_version" == v* ]]; then
-            crate_version="${crate_version:1}"
-          fi
-          make check-version NEW_CRATE_VERSION="$crate_version"
-          git tag -m "Release $VERSION" $VERSION
-          git push origin "$VERSION"
+      - name: Create tag
+        uses: actions/github-script@v5
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/${{ github.event.inputs.version }}',
+              sha: context.sha
+            })
