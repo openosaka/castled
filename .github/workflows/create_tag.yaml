@@ -1,0 +1,30 @@
+name: Create Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New tag"
+        required: true
+
+jobs:
+  create-tag:
+    name: create-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure git
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+      - name: Create a new tag and push the tag
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run : |
+          make check-version NEW_CRATE_VERSION="$VERSION"
+          git tag -m "Release $VERSION" $VERSION
+          git push origin "$VERSION"
