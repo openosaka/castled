@@ -25,7 +25,7 @@ jobs:
         env:
           VERSION: ${{ github.event.inputs.version }}
         run : |
-          crate_version="${{ env.ARTIFACT_VERSION }}"
+          crate_version="$VERSION"
           if [[ "$crate_version" == v* ]]; then
             crate_version="${crate_version:1}"
           fi
