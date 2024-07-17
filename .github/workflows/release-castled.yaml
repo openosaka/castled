@@ -75,7 +75,7 @@ jobs:
           make check-version NEW_CRATE_VERSION=$release_version
       - name: Create release
         run: |
-          gh release create ${{ env.RELEASE_VERSION }} \
+          gh release create castled/${{ env.RELEASE_VERSION }} \
             -t "Release castled/${{ env.RELEASE_VERSION }}" \
             --generate-notes
 
@@ -250,12 +250,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: castled:${{ env.RELEASE_VERSION }}
+          tags: swordjin/castled:${{ env.RELEASE_VERSION }}
           target: castle
       - name: Build and push castled
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: castle:${{ env.RELEASE_VERSION }}
+          tags: swordjin/castle:${{ env.RELEASE_VERSION }}
           target: castled
       
