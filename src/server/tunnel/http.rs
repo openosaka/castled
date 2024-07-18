@@ -1,6 +1,6 @@
 use crate::bridge::BridgeData;
 use crate::event::{self, IncomingEventSender};
-use crate::util::create_tcp_listener;
+use crate::helper::create_tcp_listener;
 
 use super::{init_data_sender_bridge, BridgeResult};
 use anyhow::{Context as _, Result};
@@ -334,7 +334,7 @@ impl LookupRequest for DynamicRegistry {
     fn lookup(&self, req: &Request<Incoming>) -> Option<mpsc::Sender<event::UserIncoming>> {
         let host = req.headers().get("host").unwrap_or(&EMPTY_HOST);
         let host = host.to_str().unwrap_or_default();
-        debug!("host: {}", host);
+        debug!(host, "matching host");
         // match the host
         let result = self.get_domain(Bytes::copy_from_slice(host.as_bytes()));
         if result.is_some() {
@@ -343,6 +343,7 @@ impl LookupRequest for DynamicRegistry {
 
         // match subdomain
         let subdomain = host.split('.').next().unwrap_or_default();
+        debug!("matching subdomain");
         let subdomain = Bytes::copy_from_slice(subdomain.as_bytes());
         self.get_subdomain(subdomain)
     }
@@ -417,6 +418,7 @@ mod test {
     use std::pin::Pin;
 
     use futures::Future;
+    use tokio::sync::oneshot;
 
     use super::*;
 

@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tunnel
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: castled
+  namespace: tunnel
+spec:
+  selector:
+    matchLabels:
+      app: castled
+  template:
+    metadata:
+      labels:
+        app: castled
+    spec:
+      containers:
+      - name: castled
+        image: castled:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 6610
+          name: control-server
+        - containerPort: 6611
+          name: vhttp-server
+        env:
+          - name: RUST_LOG
+            value: "DEBUG"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: castled
+  namespace: tunnel
+spec:
+  selector:
+    app: castled
+  ports:
+  - name: control-server
+    port: 6610
+    targetPort: control-server
+  - name: vhttp-server
+    port: 6611
+    targetPort: vhttp-server

@@ -1,6 +1,7 @@
 # Directories
 /.git/
 /.github/
+/.bin/
 /target/
 /tests/
 

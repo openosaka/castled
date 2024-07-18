@@ -6,6 +6,8 @@ use futures::ready;
 use futures::Stream;
 use std::fmt::Debug;
 use std::task::{Context, Poll};
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
 use tokio::{io, sync::mpsc::Sender};
 use tokio_util::sync::CancellationToken;
@@ -57,7 +59,7 @@ impl<T: Send> StreamingReader<T> {
 }
 
 /// read data from TrafficToClient
-impl tokio::io::AsyncRead for StreamingReader<TrafficToClient> {
+impl AsyncRead for StreamingReader<TrafficToClient> {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -73,7 +75,7 @@ impl tokio::io::AsyncRead for StreamingReader<TrafficToClient> {
     }
 }
 
-impl tokio::io::AsyncRead for StreamingReader<BridgeData> {
+impl AsyncRead for StreamingReader<BridgeData> {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -233,7 +235,7 @@ impl<T: Send + Debug> StreamingWriter<T> {
 
 macro_rules! generate_async_write_impl {
     ($type:ty) => {
-        impl tokio::io::AsyncWrite for StreamingWriter<$type> {
+        impl AsyncWrite for StreamingWriter<$type> {
             fn poll_write(
                 mut self: std::pin::Pin<&mut Self>,
                 cx: &mut Context<'_>,
