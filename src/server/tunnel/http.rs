@@ -414,6 +414,10 @@ fn find_header_end(buffer: &[u8], start: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod test {
+    use std::pin::Pin;
+
+    use futures::Future;
+
     use super::*;
 
     #[tokio::test]
@@ -465,10 +469,95 @@ mod test {
 
     #[tokio::test]
     async fn test_receive_response() {
-        // let (data_tx, mut data_rx) = mpsc::channel(32);
-        // let (header_tx, header_rx) = oneshot::channel();
-        // let (body_tx, body_rx) = oneshot::channel();
+        struct Case<'a> {
+            name: &'a str,
+            send_fn: Box<
+                dyn Fn(mpsc::Sender<BridgeData>) -> Pin<Box<dyn Future<Output = ()> + Send>>
+                    + Send
+                    + Sync
+                    + 'a,
+            >,
+            expected_header: &'a [u8],
+            expected_body: &'a [u8],
+        }
 
-        // receive_response(data_rx, header_tx, body_tx, , );
+        let cases: Vec<Case> = vec![
+            Case {
+                name: "response header and body in one data frame",
+                send_fn: Box::new(|tx| {
+                    Box::pin(async move {
+                        let _ = tx
+                            .send(BridgeData::Data(
+                                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".to_vec(),
+                            ))
+                            .await;
+                    })
+                }),
+                expected_header: b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n",
+                expected_body: b"hello",
+            },
+            Case {
+                name: "response header and body in two data frames",
+                send_fn: Box::new(|tx| {
+                    Box::pin(async move {
+                        let _ = tx
+                            .send(BridgeData::Data(b"HTTP/1.1 200 OK\r\nContent-Len".to_vec()))
+                            .await;
+                        let _ = tx
+                            .send(BridgeData::Data(b"gth: 5\r\n\r\nhello".to_vec()))
+                            .await;
+                    })
+                }),
+                expected_header: b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n",
+                expected_body: b"hello",
+            },
+            Case {
+                name: "response header and body in two data frames, and splitted by LF",
+                send_fn: Box::new(|tx| {
+                    Box::pin(async move {
+                        let _ = tx
+                            .send(BridgeData::Data(
+                                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n".to_vec(),
+                            ))
+                            .await;
+                        let _ = tx.send(BridgeData::Data(b"\r\nhello".to_vec())).await;
+                    })
+                }),
+                expected_header: b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n",
+                expected_body: b"hello",
+            },
+        ];
+
+        for case in cases {
+            println!("running test case: {}", case.name);
+
+            let (data_tx, data_rx) = mpsc::channel(32);
+            let (header_tx, header_rx) = oneshot::channel();
+            let (body_tx, mut body_rx) = mpsc::channel(32);
+            let client_cancel_sender = CancellationToken::new();
+            let client_cancel_receiver = client_cancel_sender.clone();
+            let remove_bridge_sender = CancellationToken::new();
+            let remove_bridge_receiver = remove_bridge_sender.clone();
+
+            tokio::spawn(receive_response(
+                data_rx,
+                Some(header_tx),
+                body_tx,
+                client_cancel_receiver,
+                remove_bridge_sender,
+            ));
+
+            (case.send_fn)(data_tx).await;
+            let header = header_rx.await.unwrap();
+            assert_eq!(header, case.expected_header);
+            let body = body_rx.recv().await.unwrap().unwrap();
+            assert_eq!(
+                body.into_data().unwrap(),
+                Bytes::from_static(case.expected_body)
+            );
+
+            client_cancel_sender.cancel();
+            remove_bridge_receiver.cancelled().await;
+        }
     }
 }
