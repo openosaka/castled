@@ -75,3 +75,12 @@ full = [
 
 util = []
 debug = []
+
+[[example]]
+name = "crawler"
+path = "examples/crawler.rs"
+required-features = ["full"]
+
+[[test]]
+name = "lib"
+path = "tests/lib.rs"
