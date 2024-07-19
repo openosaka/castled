@@ -1,4 +1,5 @@
 #!/bin/bash
+
 set -x
 
 root_dir=$(git rev-parse --show-toplevel)

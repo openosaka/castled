@@ -38,7 +38,7 @@ if [[ $error_code -eq 0 ]]; then
 fi
 
 # Start the nc TCP server
-exec $cur_dir/ping.py 13346 &
+exec $cur_dir/.bin/ping --port 13346 &
 http_server_pid1=$!
 wait_port 13346
 
@@ -56,7 +56,7 @@ client_pid=$!
 
 exec $root_dir/target/debug/castle http 13347 --subdomain bar &
 client_pid2=$!
-exec $cur_dir/ping.py 13347 &
+exec $cur_dir/.bin/ping --port 13347 &
 http_server_pid2=$!
 
 wait_port 13347

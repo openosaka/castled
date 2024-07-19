@@ -1,5 +1,9 @@
 #!/bin/bash
 
+cd "$(dirname "$0")"
+
+go build -o .bin/ ./ping/ping.go
+
 wait_port() {
     local port=$1
     local timeout=${2:-5}  # Default timeout is 5 seconds
