@@ -2,13 +2,13 @@ use tokio::net::{TcpListener, UdpSocket};
 use tonic::Status;
 use tracing::error;
 
-pub async fn create_tcp_listener(port: u16) -> Result<TcpListener, Status> {
+pub(crate) async fn create_tcp_listener(port: u16) -> Result<TcpListener, Status> {
     TcpListener::bind(("0.0.0.0", port))
         .await
         .map_err(map_bind_error)
 }
 
-pub async fn create_udp_socket(port: u16) -> Result<UdpSocket, Status> {
+pub(crate) async fn create_udp_socket(port: u16) -> Result<UdpSocket, Status> {
     UdpSocket::bind(("0.0.0.0", port))
         .await
         .map_err(map_bind_error)

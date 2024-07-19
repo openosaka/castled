@@ -53,6 +53,10 @@ check-version:
 		echo "Version in Cargo.toml matches expected version ($(NEW_CRATE_VERSION))"; \
 	fi
 
+.PHONY: build-examples
+build-examples:
+	DOCKER_BUILDKIT=1 docker build -t crawler:$(IMAGE_VERSION) -f go.Dockerfile .
+
 .PHONY: clean
 clean:
 	rm -rf target

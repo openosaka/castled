@@ -329,6 +329,7 @@ async fn handle_work_traffic(
     // then forward_traffic_to_local can read the data from transfer_rx
     let (transfer_tx, mut transfer_rx) = mpsc::channel::<TrafficToClient>(64);
 
+    let (local_conn_established_tx, mut local_conn_established_rx) = mpsc::channel(1);
     tokio::spawn(async move {
         let mut streaming_response = rpc_client
             .data(streaming_to_server)
@@ -336,8 +337,20 @@ async fn handle_work_traffic(
             .unwrap()
             .into_inner();
 
+        let mut local_conn_established = false;
         loop {
             let result = streaming_response.next().await;
+
+            // if the local connection is not established, we should wait until it's established
+            if !local_conn_established {
+                if let Some(v) = local_conn_established_rx.recv().await {
+                    local_conn_established = v;
+                } else {
+                    debug!("connecting to local endpoint failed");
+                    return;
+                }
+            }
+
             match result {
                 Some(Ok(traffic)) => {
                     transfer_tx.send(traffic).await.unwrap();
@@ -387,6 +400,7 @@ async fn handle_work_traffic(
             if let Err(err) = result {
                 error!(err = ?err, "failed to connect to local endpoint, so let's notify the server to close the user connection");
             }
+            local_conn_established_tx.send(true).await.unwrap();
 
             let buf = transfer_rx.recv().await.unwrap();
             socket.send(&buf.data).await.unwrap();
@@ -415,6 +429,7 @@ async fn handle_work_traffic(
 
             let mut local_conn = local_conn.unwrap();
             let (local_r, local_w) = local_conn.split();
+            local_conn_established_tx.send(true).await.unwrap();
 
             if let Err(err) = forward_traffic_to_local(
                 local_r,
