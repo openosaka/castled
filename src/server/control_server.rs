@@ -135,7 +135,7 @@ impl Server {
             }
             res = run_control_server => {
                 if let Err(err) = res {
-                    error!("server quit: {}", err);
+                    error!(err = ?err, "server quit");
                 }
             }
         }

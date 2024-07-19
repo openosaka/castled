@@ -1,5 +1,5 @@
 #!/bin/bash
-# set -x
+set -x
 
 root_dir=$(git rev-parse --show-toplevel)
 cur_dir=$root_dir/tests/e2e
@@ -16,12 +16,12 @@ cleanup() {
 trap cleanup EXIT
 
 # Start the tunnel server
-exec ./target/debug/castled &
+exec $root_dir/target/debug/castled &
 server_pid=$!
 wait_port 6610
 
 # Start the tunnel client
-exec ./target/debug/castle tcp 12345 --remote-port 9992 &
+exec $root_dir/target/debug/castle tcp 12345 --remote-port 9992 &
 client_pid=$!
 wait_port 9992
 

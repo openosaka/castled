@@ -16,14 +16,14 @@ cleanup() {
 trap cleanup EXIT
 
 # Start the tunnel server
-exec ./target/debug/castled &
+exec $root_dir/target/debug/castled &
 server_pid=$!
 
 # Give the server some time to start
 sleep 1
 
 # Start the tunnel client
-exec ./target/debug/castle tcp 12345 --remote-port 9992 &
+exec $root_dir/target/debug/castle tcp 12345 --remote-port 9992 &
 client_pid=$!
 
 sleep 1
