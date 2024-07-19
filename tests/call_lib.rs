@@ -13,6 +13,8 @@ use castled::{
     },
     server::{Config, EntrypointConfig, Server},
 };
+use http::HeaderValue;
+use tokio::sync::oneshot;
 use tokio::time::sleep;
 use wiremock::{
     matchers::{method, path},
@@ -137,14 +139,16 @@ async fn client_register_and_close_then_register_again() {
 #[tokio::test]
 async fn register_http_tunnel_with_subdomain() {
     let mock_local_server = MockServer::start().await;
-    let local_port = {
-        let uri = mock_local_server.uri();
-        uri.split(":").last().unwrap().parse::<u16>().unwrap()
-    };
+    let local_port = mock_local_server.address().port();
     let mock_body = "Hello, world!";
+    let status_code = 201;
     Mock::given(method("GET"))
         .and(path("/hello"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(mock_body))
+        .respond_with(
+            ResponseTemplate::new(status_code)
+                .set_body_string(mock_body)
+                .insert_header("FOO", "BAR"),
+        )
         .mount(&mock_local_server)
         .await;
 
@@ -153,34 +157,43 @@ async fn register_http_tunnel_with_subdomain() {
     let close_client = server.cancel.clone();
     let control_addr = server.control_addr().clone();
 
+    let (wait_client_register, wait_client_register_rx) = oneshot::channel();
     let client_handler = tokio::spawn(async move {
         let client = Client::new(control_addr);
-        let _ = client.start_tunnel(
-            new_http_tunnel(
-                "test".to_string(),
-                SocketAddr::from(([127, 0, 0, 1], local_port)),
-                Bytes::from(""),
-                Bytes::from("foo"),
-                false,
-                0,
-            ),
-            close_client.wait_shutdown_triggered(),
-        );
+        let _ = client
+            .start_tunnel(
+                new_http_tunnel(
+                    "test".to_string(),
+                    SocketAddr::from(([127, 0, 0, 1], local_port)),
+                    Bytes::from(""),
+                    Bytes::from("foo"),
+                    false,
+                    0,
+                ),
+                close_client.wait_shutdown_triggered(),
+            )
+            .await;
+        wait_client_register.send(()).unwrap();
     });
 
-    sleep(tokio::time::Duration::from_millis(100)).await;
+    wait_client_register_rx.await.unwrap();
 
     let http_client = reqwest::Client::new();
     let request = http_client
         .request(
             http::method::Method::GET,
-            format!("http://localhost:{}/hello", local_port),
+            format!("http://localhost:{}/hello", server.vhttp_port),
         )
         .header("Host", "foo.example.com")
         .build()
         .unwrap();
     let response = http_client.execute(request).await.unwrap();
-    assert_eq!(response.status(), 200);
+    assert_eq!(response.status(), status_code);
+    assert_eq!(
+        response.headers().get("FOO"),
+        Some(&HeaderValue::from_static("BAR")),
+    );
+    assert_eq!(response.text().await.unwrap(), mock_body);
 
     server.cancel.trigger_shutdown(()).unwrap();
 

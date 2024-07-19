@@ -19,13 +19,15 @@ use std::convert::Infallible;
 use std::io::Write;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
-use tracing::{debug, info, info_span, Instrument as _};
+use tracing::{debug, error, info, info_span, Instrument as _};
 
 static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
+const MAX_HEADERS: usize = 124;
+const MAX_HEADER_SIZE: usize = 4 * 1024; // 4k
 
 pub(crate) struct Http {
     port: u16,
@@ -168,44 +170,120 @@ impl Http {
         });
 
         // response to user http request by sending data to outbound_rx
-        let (outbound_tx, outbound_rx) = mpsc::channel::<Result<Frame<Bytes>, Infallible>>(1024);
+        let (body_tx, body_rx) = mpsc::channel::<Result<Frame<Bytes>, Infallible>>(1024);
+        let (header_tx, header_rx) = oneshot::channel::<Vec<u8>>();
 
-        let mut data_receiver = bridge.data_receiver;
+        let client_cancel_receiver = bridge.client_cancel_receiver.clone();
 
         // read the response from the tunnel and send it back to the user
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = bridge.client_cancel_receiver.cancelled() => {
-                        break;
-                    }
-                    Some(data) = data_receiver.recv() => {
-                        match data {
-                            BridgeData::Data(data) => {
-                                if data.is_empty() {
-                                    // means no more data
-                                    break;
-                                }
-                                let frame = Frame::data(Bytes::from(data));
-                                let _ = outbound_tx.send(Ok(frame)).await;
-                            }
-                            _ => {
-                                panic!("unexpected data type");
-                            }
-                        }
-                    }
-                }
-            }
-            bridge.remove_bridge_sender.cancel();
-        });
+        tokio::spawn(receive_response(
+            bridge.data_receiver,
+            Some(header_tx), // wrapping Option for send once
+            body_tx,
+            client_cancel_receiver,
+            bridge.remove_bridge_sender,
+        ));
 
-        let stream = ReceiverStream::new(outbound_rx);
-        let body = BoxBody::new(StreamBody::new(stream));
-        Response::builder().body(body).unwrap()
+        tokio::select! {
+            _ = bridge.client_cancel_receiver.cancelled() => {
+                Response::builder()
+                    .status(500)
+                    .body(BoxBody::new(Full::new(Bytes::from_static(b"client cancelled"))))
+                    .unwrap()
+            }
+            header = header_rx => {
+                let header_buf = header.unwrap();
+                let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+                let mut resp = httparse::Response::new(&mut headers);
+                if let Err(err) = resp.parse(&header_buf) {
+                    error!(err = ?err, "failed to parse response header");
+                    return Response::builder()
+                        .status(500)
+                        .body(BoxBody::new(Full::new(Bytes::from_static(b"failed to parse response header"))))
+                        .unwrap();
+                }
+                if resp.code.is_none() {
+                    return Response::builder()
+                        .status(500)
+                        .body(BoxBody::new(Full::new(Bytes::from_static(b"invalid response header: no status"))))
+                        .unwrap();
+                }
+
+                let mut http_builder = Response::builder().status(resp.code.unwrap())
+                    .version(match resp.version {
+                        Some(0) => http::Version::HTTP_10,
+                        _ => http::Version::HTTP_11,
+                    });
+                for header in resp.headers {
+                    http_builder = http_builder.header(header.name, header.value);
+                }
+
+                let stream = ReceiverStream::new(body_rx);
+                let body = BoxBody::new(StreamBody::new(stream));
+                http_builder.body(body).unwrap()
+            }
+        }
     }
 }
 
-// TODO(sword): use stream
+async fn receive_response(
+    mut data_receiver: mpsc::Receiver<BridgeData>,
+    mut header_tx: Option<oneshot::Sender<Vec<u8>>>,
+    body_tx: mpsc::Sender<Result<Frame<Bytes>, Infallible>>,
+    client_cancel_receiver: CancellationToken,
+    remove_bridge_sender: CancellationToken,
+) {
+    let mut header = Vec::with_capacity(MAX_HEADER_SIZE);
+    let mut header_ended = false;
+    let mut scan_buf_start = 0;
+
+    loop {
+        tokio::select! {
+            _ = client_cancel_receiver.cancelled() => {
+                break;
+            }
+            Some(data) = data_receiver.recv() => {
+                match data {
+                    BridgeData::Data(data) => {
+                        if data.is_empty() {
+                            if !header_ended {
+                                // this spawn will drop the body_tx and header_tx
+                                error!("unexpected empty data, header not ended");
+                            }
+                            // means no more data
+                            break;
+                        }
+
+                        if !header_ended {
+                            header.extend_from_slice(&data);
+                            if let Some(header_end_pos) = find_header_end(&header, scan_buf_start) {
+                                header_ended = true;
+                                let (header_part, body_part) = header.split_at(header_end_pos + 1);
+                                if let Some(header_tx) = header_tx.take() {
+                                    header_tx.send(header_part.to_vec()).unwrap();
+                                }
+
+                                let frame = Frame::data(Bytes::from(body_part.to_vec()));
+                                let _ = body_tx.send(Ok(frame)).await;
+
+                            } else {
+                                scan_buf_start = header.len().saturating_sub(3); // min: 0
+                            }
+                        } else {
+                            let frame = Frame::data(Bytes::from(data));
+                            let _ = body_tx.send(Ok(frame)).await;
+                        }
+                    }
+                    _ => {
+                        panic!("unexpected data type");
+                    }
+                }
+            }
+        }
+    }
+    remove_bridge_sender.cancel();
+}
+
 async fn request_to_stream(
     req: Request<Incoming>,
 ) -> Result<(Vec<u8>, StreamBody<BodyDataStream<Incoming>>)> {
@@ -319,6 +397,21 @@ impl DynamicRegistry {
     }
 }
 
+/// Helper function to find the end of the header (\r\n\r\n) in the buffer.
+/// Returns the position of the end of the header if found, otherwise None.
+fn find_header_end(buffer: &[u8], start: usize) -> Option<usize> {
+    for i in start..buffer.len() - 3 {
+        if buffer[i] == b'\r'
+            && buffer[i + 1] == b'\n'
+            && buffer[i + 2] == b'\r'
+            && buffer[i + 3] == b'\n'
+        {
+            return Some(i + 3);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -368,5 +461,14 @@ mod test {
         http1.unregister_domain(Bytes::from_static(b"example2.com"));
         assert!(!http2.domain_registered(&Bytes::from_static(b"example2.com")));
         assert!(http2.domain_registered(&Bytes::from_static(b"example1.com")));
+    }
+
+    #[tokio::test]
+    async fn test_receive_response() {
+        // let (data_tx, mut data_rx) = mpsc::channel(32);
+        // let (header_tx, header_rx) = oneshot::channel();
+        // let (body_tx, body_rx) = oneshot::channel();
+
+        // receive_response(data_rx, header_tx, body_tx, , );
     }
 }

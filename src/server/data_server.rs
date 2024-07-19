@@ -207,7 +207,6 @@ impl DataServer {
             }
         }
 
-        // let subdomain = subdomain_cell.into_inner();
         if !subdomain.is_empty() {
             // forward the http request from this subdomain to control server.
             if self.http_registry.subdomain_registered(subdomain) {

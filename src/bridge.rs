@@ -17,13 +17,13 @@ pub struct DataSenderBridge {
     chan: DataSender,
     /// when the server receives [`crate::protocol::pb::traffic_to_server::Action::Close`] action from [`crate::protocol::pb::tunnel_service_server::TunnelService::data`] streaming,
     /// the server will cancel the bridge.
-    cancel: CancellationToken,
+    shutdown: CancellationToken,
 }
 
 impl DataSenderBridge {
     /// new creates a new DataSenderBridge.
-    pub fn new(chan: DataSender, cancel: CancellationToken) -> Self {
-        Self { chan, cancel }
+    pub fn new(chan: DataSender, shutdown: CancellationToken) -> Self {
+        Self { chan, shutdown }
     }
 
     /// send sends data to data server.
@@ -41,7 +41,7 @@ impl DataSenderBridge {
 
     /// close closes the bridge.
     pub fn close(&self) {
-        self.cancel.cancel();
+        self.shutdown.cancel();
     }
 }
 
