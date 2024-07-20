@@ -11,6 +11,9 @@ ifeq ($(ENABLE_TOKIO_CONSOLE), 1)
 	FEATURES += "debug"
 endif
 
+EXAMPLES = \
+	crawler
+
 .PHONY: build
 build:
 	RUSTFLAGS=$(RUSTFLAGS) cargo build $(if $(FEATURES),--features $(FEATURES))
@@ -56,6 +59,18 @@ check-version:
 .PHONY: build-examples
 build-examples:
 	DOCKER_BUILDKIT=1 docker build -t crawler:$(IMAGE_VERSION) -f go.Dockerfile .
+
+.PHONY: test-examples
+test-examples: build-examples build-docker
+	$(MAKE) -C examples stop
+	$(MAKE) -C examples start
+	$(MAKE) run-examples
+
+.PHONY: run-examples
+run-examples:
+	for example in $(EXAMPLES); do \
+		$(MAKE) -C examples run-example EXAMPLE=$$example; \
+	done
 
 .PHONY: clean
 clean:

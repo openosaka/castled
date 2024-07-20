@@ -79,7 +79,7 @@ debug = []
 [[example]]
 name = "crawler"
 path = "examples/crawler.rs"
-required-features = ["full"]
+required-features = ["util"]
 
 [[test]]
 name = "lib"
