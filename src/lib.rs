@@ -8,5 +8,5 @@ pub mod client;
 pub mod debug;
 pub mod server;
 
-#[cfg(not(feature = "util"))]
+#[cfg(feature = "util")]
 pub mod util;

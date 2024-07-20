@@ -8,7 +8,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -21,10 +21,21 @@ jobs:
       run: cargo clippy -- -D warnings
     - name: Build
       run: make build
-    - name: cargo test --locked
+    - name: unit test
       run: cargo test --locked --all-targets
     # https://github.com/rust-lang/cargo/issues/6669
-    - name: cargo test --doc
+    - name: doc test
       run: cargo test --locked --all-features --doc
-    - name: Run e2e
+    - name: e2e test
       run: make e2e
+  run-examples:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+    - name: Install Protoc
+      uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: examples test
+      run: make test-examples

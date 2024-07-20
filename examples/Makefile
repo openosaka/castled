@@ -52,6 +52,11 @@ apply:
 stop: $(KIND)
 	$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+EXAMPLE ?= crawler
+.PHONY: run-example
+run-example:
+	KUBECTL_BIN=$(KUBECTL) cargo run --package castled --example $(EXAMPLE) --features="full"
+
 $(KIND):
 	mkdir -p $(BIN_DIR)
 	curl -sSLf -o $@ https://github.com/kubernetes-sigs/kind/releases/download/$(KIND_VERSION)/kind-$(DL_OS)-$(DL_ARCH)
