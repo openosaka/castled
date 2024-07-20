@@ -18,9 +18,7 @@ trap cleanup EXIT
 # Start the tunnel server
 exec ./target/debug/castled &
 server_pid=$!
-
-# Give the server some time to start
-sleep 1
+sleep 0.2
 
 # Start the tunnel client
 exec ./target/debug/castle tcp 12348 --remote-port 9992 &
@@ -28,8 +26,7 @@ client_pid=$!
 
 # Start the nc TCP server
 exec nc -l -p 12348 > actual.txt & # it closes with nc's timeout
-
-sleep 1
+sleep 0.2
 
 # quit after 1 second
 # TODO(sword): we don't require this timeout,

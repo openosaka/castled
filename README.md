@@ -1,6 +1,7 @@
 # Castle
 
 [![CI Test](https://github.com/openosaka/castled/actions/workflows/ci.yaml/badge.svg)](https://github.com/openosaka/castled/actions/workflows/ci.yaml)
+[![License](https://img.shields.io/crates/l/castled)](https://github.com/openosaka/castled/blob/main/LICENSE)
 
 Castle is a simple tunnel based on GRPC that allows you to expose your local services to the internet,
 but it's **mainly designed for 🌟testing and ✨development purposes**.

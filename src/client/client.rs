@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use async_shutdown::ShutdownSignal;
+use async_shutdown::{ShutdownManager, ShutdownSignal};
 use std::net::SocketAddr;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{transport::Channel, Response, Status, Streaming};
@@ -54,27 +54,29 @@ impl Client {
     ///     let client = Client::new("127.0.0.1:6100".parse().unwrap());
     ///     let tunnel = new_tcp_tunnel(String::from("my-tunnel"), SocketAddr::from(([127, 0, 0, 1], 8971)), 8080);
     ///     let shutdown = ShutdownManager::new();
-    ///     let entrypoint = client.start_tunnel(tunnel, shutdown.wait_shutdown_triggered()).await.unwrap();
+    ///     let entrypoint = client.start_tunnel(tunnel, shutdown.clone()).await.unwrap();
     ///     println!("entrypoint: {:?}", entrypoint);
+    ///     shutdown.wait_shutdown_complete().await;
     /// }
     /// ```
     pub async fn start_tunnel(
         self,
         tunnel: Tunnel,
-        shutdown: ShutdownSignal<()>,
+        shutdown: ShutdownManager<i8>,
     ) -> Result<Vec<String>> {
         let (entrypoint_tx, entrypoint_rx) = oneshot::channel();
 
         tokio::spawn(async move {
             let run_tunnel = self.handle_tunnel(
-                shutdown.clone(),
+                shutdown.wait_shutdown_triggered(),
                 tunnel,
                 Some(move |entrypoint| {
                     let _ = entrypoint_tx.send(entrypoint);
                 }),
             );
+
             tokio::select! {
-                _ = shutdown => {
+                _ = shutdown.wait_shutdown_triggered() => {
                     debug!("cancelling tcp tunnel");
                 }
                 result = run_tunnel =>  match result {
@@ -83,9 +85,11 @@ impl Client {
                     },
                     Err(err) => {
                         error!(err = ?err, "tunnel closed unexpectedly");
+                        return shutdown.trigger_shutdown_token(1);
                     },
                 }
             }
+            shutdown.trigger_shutdown_token(0)
         });
 
         let entrypoint = entrypoint_rx
@@ -99,7 +103,7 @@ impl Client {
     /// we treat the tunnel has been established successfully after we receive the init command.
     async fn wait_until_registered(
         &self,
-        shutdown: ShutdownSignal<()>,
+        shutdown: ShutdownSignal<i8>,
         control_stream: &mut Streaming<Control>,
     ) -> Result<Vec<String>> {
         select! {
@@ -168,7 +172,7 @@ impl Client {
     #[allow(dead_code)]
     async fn handle_tunnel(
         &self,
-        shutdown: ShutdownSignal<()>,
+        shutdown: ShutdownSignal<i8>,
         tunnel: Tunnel,
         hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
     ) -> Result<()> {
@@ -198,7 +202,7 @@ impl Client {
     #[instrument(skip(self, shutdown, rpc_client, register_resp, hook))]
     async fn handle_control_stream(
         &self,
-        shutdown: ShutdownSignal<()>,
+        shutdown: ShutdownSignal<i8>,
         rpc_client: TunnelServiceClient<Channel>,
         register_resp: tonic::Response<Streaming<Control>>,
         local_endpoint: SocketAddr,
@@ -226,7 +230,7 @@ impl Client {
 
     async fn start_streaming(
         &self,
-        shutdown: ShutdownSignal<()>,
+        shutdown: ShutdownSignal<i8>,
         control_stream: &mut Streaming<Control>,
         rpc_client: TunnelServiceClient<Channel>,
         local_endpoint: SocketAddr,

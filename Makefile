@@ -35,6 +35,7 @@ run-client: build
 .PHONY: e2e
 e2e: build
 	./tests/e2e/test_close_server_gracefully.sh
+	./tests/e2e/test_client_close_when_server_close.sh
 	./tests/e2e/test_basic_tcp.sh
 	./tests/e2e/test_tcp_local_server_not_start.sh
 	./tests/e2e/test_tcp_with_tunnel_http_server.sh

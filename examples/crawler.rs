@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
                 false,
                 0,
             ),
-            shutdown.wait_shutdown_triggered(),
+            shutdown.clone(),
         )
         .await?;
     // ### call the proxy
@@ -105,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
     let response2_text = response2.text().await?;
     assert_eq!(response1_text, response2_text);
 
-    shutdown.trigger_shutdown(()).unwrap();
+    shutdown.trigger_shutdown(0).unwrap();
     Ok(())
 }
 

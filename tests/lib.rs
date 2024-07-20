@@ -36,7 +36,7 @@ async fn client_register_tcp() {
         ..Default::default()
     })
     .await;
-    let close_client = server.cancel.clone().wait_shutdown_triggered();
+    let close_client = server.cancel.clone();
     let remote_port = free_port().unwrap();
     let control_addr = server.control_addr().clone();
 
@@ -71,7 +71,7 @@ async fn client_register_tcp() {
         server.vhttp_port,
     );
 
-    server.cancel.trigger_shutdown(()).unwrap();
+    server.cancel.trigger_shutdown(0).unwrap();
 
     let client_exit = tokio::join!(client_handler);
     assert!(client_exit.0.is_ok());
@@ -96,14 +96,14 @@ async fn client_register_and_close_then_register_again() {
                     SocketAddr::from(([127, 0, 0, 1], 8971)),
                     remote_port,
                 ),
-                close_client.wait_shutdown_triggered(),
+                close_client.clone(),
             )
             .await;
     });
 
     tokio::spawn(async move {
         sleep(tokio::time::Duration::from_millis(300)).await;
-        shutdown.trigger_shutdown(());
+        shutdown.trigger_shutdown(0);
     });
 
     let client_exit = tokio::join!(client_handler);
@@ -122,14 +122,14 @@ async fn client_register_and_close_then_register_again() {
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
                     remote_port,
                 ),
-                close_client.wait_shutdown_triggered(),
+                close_client,
             )
             .await;
     });
 
     tokio::spawn(async move {
         sleep(tokio::time::Duration::from_millis(300)).await;
-        shutdown.trigger_shutdown(());
+        shutdown.trigger_shutdown(0);
     });
 
     let client_exit = tokio::join!(client_handler);
@@ -170,7 +170,7 @@ async fn register_http_tunnel_with_subdomain() {
                     false,
                     0,
                 ),
-                close_client.wait_shutdown_triggered(),
+                close_client,
             )
             .await;
         wait_client_register.send(()).unwrap();
@@ -195,7 +195,7 @@ async fn register_http_tunnel_with_subdomain() {
     );
     assert_eq!(response.text().await.unwrap(), mock_body);
 
-    server.cancel.trigger_shutdown(()).unwrap();
+    server.cancel.trigger_shutdown(0).unwrap();
 
     let client_exit = tokio::join!(client_handler);
     assert!(client_exit.0.is_ok());
@@ -443,9 +443,7 @@ async fn test_assigned_entrypoint() {
 
             let client_handler = tokio::spawn(async move {
                 let client = Client::new(control_addr);
-                let entrypoint = client
-                    .start_tunnel(tunnel.tunnel, close_client.wait_shutdown_triggered())
-                    .await;
+                let entrypoint = client.start_tunnel(tunnel.tunnel, close_client).await;
                 assert!(entrypoint.is_ok());
                 let entrypoint = entrypoint.unwrap();
                 assert_eq!(entrypoint, tunnel.expected);
@@ -453,7 +451,7 @@ async fn test_assigned_entrypoint() {
 
             tokio::spawn(async move {
                 sleep(tokio::time::Duration::from_millis(100)).await;
-                shutdown.trigger_shutdown(()).unwrap();
+                shutdown.trigger_shutdown(0).unwrap();
             });
 
             let _ = tokio::join!(client_handler);
@@ -464,7 +462,7 @@ async fn test_assigned_entrypoint() {
 struct TestServer {
     control_port: u16,
     vhttp_port: u16,
-    cancel: ShutdownManager<()>,
+    cancel: ShutdownManager<i8>,
 }
 
 impl TestServer {
