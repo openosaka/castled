@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
 
     let client = Client::new(args.server_addr);
     let tunnel;
-    let shutdown: ShutdownManager<()> = ShutdownManager::new();
+    let shutdown: ShutdownManager<i8> = ShutdownManager::new();
     let wait_complete = shutdown.wait_shutdown_complete();
 
     match args.command {
@@ -130,9 +130,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let entrypoint = client
-        .start_tunnel(tunnel, shutdown.wait_shutdown_triggered())
-        .await?;
+    let entrypoint = client.start_tunnel(tunnel, shutdown.clone()).await?;
 
     info!("Entrypoint: {:?}", entrypoint);
 
@@ -142,12 +140,11 @@ async fn main() -> anyhow::Result<()> {
             panic!("Failed to listen for the ctrl-c signal: {:?}", e);
         }
         info!("Received ctrl-c signal. Shutting down...");
-        shutdown.trigger_shutdown(()).unwrap();
+        shutdown.trigger_shutdown(0).unwrap();
     });
 
-    wait_complete.await;
-
-    Ok(())
+    let code = wait_complete.await;
+    std::process::exit(code as i32)
 }
 
 async fn parse_socket_addr(local_addr: &str, port: u16) -> anyhow::Result<SocketAddr> {
