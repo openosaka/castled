@@ -14,7 +14,7 @@ use tokio::{
 
 use crate::{
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
-    protocol::pb::{
+    pb::{
         self, control::Payload, traffic_to_server, tunnel::Type,
         tunnel_service_client::TunnelServiceClient, Command, Control, RegisterReq, TrafficToClient,
         TrafficToServer,

@@ -11,6 +11,13 @@ ifeq ($(ENABLE_TOKIO_CONSOLE), 1)
 	FEATURES += "debug"
 endif
 
+PWD := $(shell pwd)
+PROTOC_GEN_GO = $(PWD)/bin/protoc-gen-go
+BUF_VERSION = 1.34.0
+BUF = $(PWD)/.bin/buf
+RUN_BUF = PATH=$(PWD)/.bin:$$PATH $(BUF)
+PROTOC_GEN_GO_VERSION := $(shell awk '/google.golang.org\/protobuf/ {print substr($$2, 2)}' go.mod)
+
 EXAMPLES = \
 	crawler
 
@@ -57,6 +64,15 @@ check-version:
 		echo "Version in Cargo.toml matches expected version ($(NEW_CRATE_VERSION))"; \
 	fi
 
+.PHONY: update-deps
+update-deps: $(BUF)
+	$(RUN_BUF) mod update
+	go get -u ./...
+
+.PHONY: generate-proto
+generate-proto: $(BUF) $(PROTOC_GEN_GO)
+	$(RUN_BUF) generate
+
 .PHONY: build-examples
 build-examples:
 	DOCKER_BUILDKIT=1 docker build -t crawler:$(IMAGE_VERSION) -f go.Dockerfile .
@@ -76,3 +92,11 @@ run-examples:
 .PHONY: clean
 clean:
 	rm -rf target
+
+$(BUF):
+	mkdir -p .bin
+	GOBIN=$(PWD)/.bin go install github.com/bufbuild/buf/cmd/buf@v$(BUF_VERSION)
+
+$(PROTOC_GEN_GO):
+	mkdir -p .bin
+	GOBIN=$(PWD)/.bin go install google.golang.org/protobuf/cmd/protoc-gen-go@v$(PROTOC_GEN_GO_VERSION)

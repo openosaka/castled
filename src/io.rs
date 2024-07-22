@@ -1,7 +1,7 @@
 use crate::bridge::BridgeData;
-use crate::protocol::pb::traffic_to_server;
-use crate::protocol::pb::TrafficToClient;
-use crate::protocol::pb::TrafficToServer;
+use crate::pb::traffic_to_server;
+use crate::pb::TrafficToClient;
+use crate::pb::TrafficToServer;
 use futures::ready;
 use futures::Stream;
 use std::fmt::Debug;

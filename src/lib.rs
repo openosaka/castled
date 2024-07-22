@@ -2,7 +2,10 @@ pub(crate) mod bridge;
 pub(crate) mod event;
 pub(crate) mod helper;
 pub(crate) mod io;
-pub(crate) mod protocol;
+
+pub mod pb {
+    include!("gen/message.rs");
+}
 
 pub mod client;
 pub mod debug;

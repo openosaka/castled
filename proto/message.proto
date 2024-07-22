@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package message;
 
+option go_package = "github.com/castled-dev/castled/proto/message";
+
 service TunnelService {
   // the client sends Register to the server to create a tunnel.
   // the server returns a stream Control to the client, the following control messages are sent through the stream.
