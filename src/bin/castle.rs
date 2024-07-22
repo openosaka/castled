@@ -1,5 +1,4 @@
 use async_shutdown::ShutdownManager;
-use bytes::Bytes;
 use castled::{
     client::{
         tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel},
@@ -92,11 +91,7 @@ async fn main() -> anyhow::Result<()> {
             local_addr,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            tunnel = new_tcp_tunnel(
-                DEFAULT_TCP_TUNNEL_NAME.to_string(),
-                local_endpoint,
-                remote_port,
-            );
+            tunnel = new_tcp_tunnel(DEFAULT_TCP_TUNNEL_NAME, local_endpoint, remote_port);
         }
         Commands::Udp {
             port,
@@ -104,11 +99,7 @@ async fn main() -> anyhow::Result<()> {
             local_addr,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            tunnel = new_udp_tunnel(
-                DEFAULT_UDP_TUNNEL_NAME.to_string(),
-                local_endpoint,
-                remote_port,
-            );
+            tunnel = new_udp_tunnel(DEFAULT_UDP_TUNNEL_NAME, local_endpoint, remote_port);
         }
         Commands::Http {
             port,
@@ -120,10 +111,10 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
             tunnel = new_http_tunnel(
-                DEFAULT_HTTP_TUNNEL_NAME.to_string(),
+                DEFAULT_HTTP_TUNNEL_NAME,
                 local_endpoint,
-                Bytes::from(domain.unwrap_or_default()),
-                Bytes::from(subdomain.unwrap_or_default()),
+                &domain.unwrap_or_default(),
+                &subdomain.unwrap_or_default(),
                 random_subdomain,
                 remote_port.unwrap_or(0),
             );
