@@ -52,7 +52,7 @@ impl Client {
     ///
     /// async fn run() {
     ///     let client = Client::new("127.0.0.1:6100".parse().unwrap());
-    ///     let tunnel = new_tcp_tunnel(String::from("my-tunnel"), SocketAddr::from(([127, 0, 0, 1], 8971)), 8080);
+    ///     let tunnel = new_tcp_tunnel("my-tunnel", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080);
     ///     let shutdown = ShutdownManager::new();
     ///     let entrypoint = client.start_tunnel(tunnel, shutdown.clone()).await.unwrap();
     ///     println!("entrypoint: {:?}", entrypoint);

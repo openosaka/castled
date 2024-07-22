@@ -13,10 +13,10 @@ pub struct Tunnel {
     pub(crate) local_endpoint: SocketAddr,
 }
 
-pub fn new_tcp_tunnel(name: String, local_endpoint: SocketAddr, remote_port: u16) -> Tunnel {
+pub fn new_tcp_tunnel(name: &str, local_endpoint: SocketAddr, remote_port: u16) -> Tunnel {
     Tunnel {
         inner: pb::Tunnel {
-            name,
+            name: name.to_string(),
             r#type: Type::Tcp as i32,
             config: Some(tunnel::Config::Tcp(TcpConfig {
                 remote_port: remote_port as i32,
@@ -27,10 +27,10 @@ pub fn new_tcp_tunnel(name: String, local_endpoint: SocketAddr, remote_port: u16
     }
 }
 
-pub fn new_udp_tunnel(name: String, local_endpoint: SocketAddr, remote_port: u16) -> Tunnel {
+pub fn new_udp_tunnel(name: &str, local_endpoint: SocketAddr, remote_port: u16) -> Tunnel {
     Tunnel {
         inner: pb::Tunnel {
-            name,
+            name: name.to_string(),
             r#type: Type::Udp as i32,
             config: Some(tunnel::Config::Udp(UdpConfig {
                 remote_port: remote_port as i32,
@@ -41,21 +41,21 @@ pub fn new_udp_tunnel(name: String, local_endpoint: SocketAddr, remote_port: u16
     }
 }
 
-pub fn new_http_tunnel(
-    name: String,
+pub fn new_http_tunnel<'a>(
+    name: &'a str,
     local_endpoint: SocketAddr,
-    domain: Bytes,
-    subdomain: Bytes,
+    domain: &'a str,
+    subdomain: &'a str,
     random_subdomain: bool,
     remote_port: u16,
 ) -> Tunnel {
     Tunnel {
         inner: pb::Tunnel {
-            name,
+            name: name.to_string(),
             r#type: Type::Http as i32,
             config: Some(tunnel::Config::Http(get_http_config(
-                domain,
-                subdomain,
+                Bytes::copy_from_slice(domain.as_bytes()),
+                Bytes::copy_from_slice(subdomain.as_bytes()),
                 random_subdomain,
                 remote_port,
             ))),

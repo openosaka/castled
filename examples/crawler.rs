@@ -5,7 +5,6 @@ use std::{
 };
 
 use async_shutdown::ShutdownManager;
-use bytes::Bytes;
 use castled::{client::tunnel::new_http_tunnel, util};
 use serde::Deserialize;
 use tokio::process::Child;
@@ -80,10 +79,10 @@ async fn main() -> anyhow::Result<()> {
     let _ = castled_client
         .start_tunnel(
             new_http_tunnel(
-                "foo".to_string(),
+                "foo",
                 in_memory_server.address().to_owned(),
-                Bytes::from(mock_host),
-                Bytes::from(""),
+                mock_host,
+                "",
                 false,
                 0,
             ),

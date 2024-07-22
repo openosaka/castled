@@ -5,7 +5,6 @@ use crate::common::is_port_listening;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use async_shutdown::ShutdownManager;
-use bytes::Bytes;
 use castled::{
     client::{
         tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel, Tunnel},
@@ -45,7 +44,7 @@ async fn client_register_tcp() {
         let entrypoint = client
             .start_tunnel(
                 new_tcp_tunnel(
-                    "test".to_string(),
+                    "test",
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
                     remote_port,
                 ),
@@ -92,7 +91,7 @@ async fn client_register_and_close_then_register_again() {
         let _ = client
             .start_tunnel(
                 new_tcp_tunnel(
-                    "test".to_string(),
+                    "test",
                     SocketAddr::from(([127, 0, 0, 1], 8971)),
                     remote_port,
                 ),
@@ -118,7 +117,7 @@ async fn client_register_and_close_then_register_again() {
         let _ = client
             .start_tunnel(
                 new_tcp_tunnel(
-                    "test".to_string(),
+                    "test",
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
                     remote_port,
                 ),
@@ -163,10 +162,10 @@ async fn register_http_tunnel_with_subdomain() {
         let _ = client
             .start_tunnel(
                 new_http_tunnel(
-                    "test".to_string(),
+                    "test",
                     SocketAddr::from(([127, 0, 0, 1], local_port)),
-                    Bytes::from(""),
-                    Bytes::from("foo"),
+                    "",
+                    "foo",
                     false,
                     0,
                 ),
@@ -218,27 +217,19 @@ async fn test_assigned_entrypoint() {
             entrypoint: Default::default(),
             tunnels: vec![
                 TestTunnel {
-                    tunnel: new_tcp_tunnel(
-                        "test".to_string(),
-                        SocketAddr::from(([127, 0, 0, 1], 8971)),
-                        8080,
-                    ),
+                    tunnel: new_tcp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
                     expected: vec![],
                 },
                 TestTunnel {
-                    tunnel: new_udp_tunnel(
-                        "test".to_string(),
-                        SocketAddr::from(([127, 0, 0, 1], 8971)),
-                        8080,
-                    ),
+                    tunnel: new_udp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
                     expected: vec![],
                 },
                 TestTunnel {
                     tunnel: new_http_tunnel(
-                        "test".to_string(),
+                        "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        Bytes::from(""),
-                        Bytes::from(""),
+                        "",
+                        "",
                         false,
                         0,
                     ),
@@ -253,27 +244,19 @@ async fn test_assigned_entrypoint() {
             },
             tunnels: vec![
                 TestTunnel {
-                    tunnel: new_tcp_tunnel(
-                        "test".to_string(),
-                        SocketAddr::from(([127, 0, 0, 1], 8971)),
-                        8080,
-                    ),
+                    tunnel: new_tcp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
                     expected: vec!["tcp://example.com:8080"],
                 },
                 TestTunnel {
-                    tunnel: new_udp_tunnel(
-                        "test".to_string(),
-                        SocketAddr::from(([127, 0, 0, 1], 8971)),
-                        8080,
-                    ),
+                    tunnel: new_udp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
                     expected: vec!["udp://example.com:8080"],
                 },
                 TestTunnel {
                     tunnel: new_http_tunnel(
-                        "test".to_string(),
+                        "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        Bytes::from(""),
-                        Bytes::from(""),
+                        "",
+                        "",
                         false,
                         9999,
                     ),
@@ -281,10 +264,10 @@ async fn test_assigned_entrypoint() {
                 },
                 TestTunnel {
                     tunnel: new_http_tunnel(
-                        "test".to_string(),
+                        "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        Bytes::from("mydomain.com"),
-                        Bytes::from(""),
+                        "mydomain.com",
+                        "",
                         false,
                         9999,
                     ),
@@ -292,10 +275,10 @@ async fn test_assigned_entrypoint() {
                 },
                 TestTunnel {
                     tunnel: new_http_tunnel(
-                        "test".to_string(),
+                        "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        Bytes::from(""),
-                        Bytes::from("foo"),
+                        "",
+                        "foo",
                         false,
                         9999,
                     ),
@@ -310,27 +293,19 @@ async fn test_assigned_entrypoint() {
             },
             tunnels: vec![
                 TestTunnel {
-                    tunnel: new_tcp_tunnel(
-                        "test".to_string(),
-                        SocketAddr::from(([127, 0, 0, 1], 8971)),
-                        8080,
-                    ),
+                    tunnel: new_tcp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
                     expected: vec!["tcp://127.0.0.1:8080"],
                 },
                 TestTunnel {
-                    tunnel: new_udp_tunnel(
-                        "test".to_string(),
-                        SocketAddr::from(([127, 0, 0, 1], 8971)),
-                        8080,
-                    ),
+                    tunnel: new_udp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
                     expected: vec!["udp://127.0.0.1:8080"],
                 },
                 TestTunnel {
                     tunnel: new_http_tunnel(
-                        "test".to_string(),
+                        "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        Bytes::from(""),
-                        Bytes::from(""),
+                        "",
+                        "",
                         false,
                         9999,
                     ),
@@ -338,10 +313,10 @@ async fn test_assigned_entrypoint() {
                 },
                 TestTunnel {
                     tunnel: new_http_tunnel(
-                        "test".to_string(),
+                        "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        Bytes::from("mydomain.com"),
-                        Bytes::from(""),
+                        "mydomain.com",
+                        "",
                         false,
                         9999,
                     ),
@@ -349,10 +324,10 @@ async fn test_assigned_entrypoint() {
                 },
                 TestTunnel {
                     tunnel: new_http_tunnel(
-                        "test".to_string(),
+                        "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        Bytes::from(""),
-                        Bytes::from("foo"),
+                        "",
+                        "foo",
                         false,
                         9999,
                     ),
@@ -369,11 +344,7 @@ async fn test_assigned_entrypoint() {
             },
             tunnels: vec![
                 TestTunnel {
-                    tunnel: new_tcp_tunnel(
-                        "test".to_string(),
-                        SocketAddr::from(([127, 0, 0, 1], 8971)),
-                        8080,
-                    ),
+                    tunnel: new_tcp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
                     expected: vec![
                         "tcp://127.0.0.1:8080",
                         "tcp://example.com:8080",
@@ -381,11 +352,7 @@ async fn test_assigned_entrypoint() {
                     ],
                 },
                 TestTunnel {
-                    tunnel: new_udp_tunnel(
-                        "test".to_string(),
-                        SocketAddr::from(([127, 0, 0, 1], 8971)),
-                        8080,
-                    ),
+                    tunnel: new_udp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
                     expected: vec![
                         "udp://127.0.0.1:8080",
                         "udp://example.com:8080",
@@ -394,10 +361,10 @@ async fn test_assigned_entrypoint() {
                 },
                 TestTunnel {
                     tunnel: new_http_tunnel(
-                        "test".to_string(),
+                        "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        Bytes::from(""),
-                        Bytes::from(""),
+                        "",
+                        "",
                         false,
                         9999,
                     ),
@@ -409,10 +376,10 @@ async fn test_assigned_entrypoint() {
                 },
                 TestTunnel {
                     tunnel: new_http_tunnel(
-                        "test".to_string(),
+                        "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        Bytes::from("mydomain.com"),
-                        Bytes::from(""),
+                        "mydomain.com",
+                        "",
                         false,
                         9999,
                     ),
@@ -420,10 +387,10 @@ async fn test_assigned_entrypoint() {
                 },
                 TestTunnel {
                     tunnel: new_http_tunnel(
-                        "test".to_string(),
+                        "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        Bytes::from(""),
-                        Bytes::from("bar"),
+                        "",
+                        "bar",
                         false,
                         9999,
                     ),
