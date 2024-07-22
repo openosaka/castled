@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 
-use crate::protocol::pb::{
+use crate::pb::{
     self,
     tunnel::{self, Type},
     HttpConfig, TcpConfig, UdpConfig,

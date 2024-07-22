@@ -1,10 +1,10 @@
 use crate::event::ClientEventResponse;
-use crate::protocol::pb::{traffic_to_server, TrafficToServer};
-use crate::protocol::validate::validate_register_req;
+use crate::helper::validate_register_req;
+use crate::pb::{traffic_to_server, TrafficToServer};
 use crate::{bridge, event};
 use crate::{
     io::CancellableReceiver,
-    protocol::pb::{
+    pb::{
         control::Payload,
         tunnel::Config::{Http, Tcp, Udp},
         tunnel_service_server::{TunnelService, TunnelServiceServer},
