@@ -348,7 +348,13 @@ async fn handle_work_traffic(
 
             // if the local connection is not established, we should wait until it's established
             if !local_conn_established {
-                if let None = local_conn_established_rx.take().unwrap().recv().await {
+                if local_conn_established_rx
+                    .take()
+                    .unwrap()
+                    .recv()
+                    .await
+                    .is_none()
+                {
                     debug!("connecting to local endpoint failed");
                     return;
                 } else {
@@ -417,6 +423,7 @@ async fn handle_work_traffic(
         });
     } else {
         tokio::spawn(async move {
+            // TODO(sword): use a connection pool to reuse the tcp connection
             let local_conn = TcpStream::connect(local_endpoint).await;
             if local_conn.is_err() {
                 error!("failed to connect to local endpoint {}, so let's notify the server to close the user connection", local_endpoint);

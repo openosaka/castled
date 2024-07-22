@@ -102,12 +102,9 @@ impl Http {
                                 });
 
                                 tokio::select! {
-                                    _ = shutdown.cancelled() => {
-                                        return;
-                                    }
+                                    _ = shutdown.cancelled() => {}
                                     _ = http1_builder.serve_connection(io, new_service) => {
                                         info!("http1 connection closed");
-                                        return;
                                     }
                                 }
                             }.instrument(info_span!("vhttp_handler"));
