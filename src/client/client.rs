@@ -333,7 +333,8 @@ async fn handle_work_traffic(
     // then forward_traffic_to_local can read the data from transfer_rx
     let (transfer_tx, mut transfer_rx) = mpsc::channel::<TrafficToClient>(64);
 
-    let (local_conn_established_tx, mut local_conn_established_rx) = mpsc::channel(1);
+    let (local_conn_established_tx, local_conn_established_rx) = mpsc::channel::<()>(1);
+    let mut local_conn_established_rx = Some(local_conn_established_rx);
     tokio::spawn(async move {
         let mut streaming_response = rpc_client
             .data(streaming_to_server)
@@ -347,28 +348,29 @@ async fn handle_work_traffic(
 
             // if the local connection is not established, we should wait until it's established
             if !local_conn_established {
-                if let Some(v) = local_conn_established_rx.recv().await {
-                    local_conn_established = v;
-                } else {
+                if let None = local_conn_established_rx.take().unwrap().recv().await {
                     debug!("connecting to local endpoint failed");
                     return;
+                } else {
+                    info!("local connection established");
+                    local_conn_established = true;
                 }
             }
 
             match result {
                 Some(Ok(traffic)) => {
                     transfer_tx.send(traffic).await.unwrap();
-                    continue;
                 }
                 Some(Err(status)) => {
                     error!("received error status: {:?}", status);
+                    return;
                 }
                 None => {
                     // when the server finished traffic, it will close the data streaming
                     debug!("data streaming closed by the server");
+                    return;
                 }
             }
-            return;
         }
     });
 
@@ -404,7 +406,7 @@ async fn handle_work_traffic(
             if let Err(err) = result {
                 error!(err = ?err, "failed to connect to local endpoint, so let's notify the server to close the user connection");
             }
-            local_conn_established_tx.send(true).await.unwrap();
+            local_conn_established_tx.send(()).await.unwrap();
 
             let buf = transfer_rx.recv().await.unwrap();
             socket.send(&buf.data).await.unwrap();
@@ -433,7 +435,7 @@ async fn handle_work_traffic(
 
             let mut local_conn = local_conn.unwrap();
             let (local_r, local_w) = local_conn.split();
-            local_conn_established_tx.send(true).await.unwrap();
+            local_conn_established_tx.send(()).await.unwrap();
 
             if let Err(err) = forward_traffic_to_local(
                 local_r,
