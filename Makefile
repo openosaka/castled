@@ -1,5 +1,6 @@
 # if you want to enable tokio console, you can make TARGET ENABLE_TOKIO_CONSOLE=1
 ENABLE_TOKIO_CONSOLE ?= 0
+RUST_LOG = INFO
 
 RUSTFLAGS =
 FEATURES =
@@ -33,11 +34,11 @@ build-docker:
 
 .PHONY: run-server
 run-server: build
-	RUST_LOG=INFO ./target/debug/castled --domain localhost --ip 127.0.0.1
+	RUST_LOG=$(RUST_LOG) ./target/debug/castled --domain localhost --ip 127.0.0.1
 
 .PHONY: run-client
 run-client: build
-	TOKIO_CONSOLE_BIND=127.0.0.1:6670 RUST_LOG=debug ./target/debug/castle tcp 12345 --remote-port 9991
+	TOKIO_CONSOLE_BIND=127.0.0.1:6670 RUST_LOG=$(RUST_LOG) ./target/debug/castle tcp 12345 --remote-port 9991
 
 .PHONY: e2e
 e2e: build

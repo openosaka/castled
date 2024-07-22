@@ -362,7 +362,7 @@ impl TunnelService for ControlHandler {
                                 let bridge_id = Bytes::copy_from_slice(bridge_id_str.as_bytes());
                                 let bridge = bridges
                                     .get(&bridge_id)
-                                    .context("connection not found")
+                                    .context(format!("connection not found, traffic action: {}", traffic.action))
                                     .unwrap();
                                 let bridge = bridge.value();
 

@@ -79,6 +79,7 @@ impl Http {
         let http1_builder = Arc::new(http1::Builder::new());
         let vhttp_handler = async move {
             loop {
+                let shutdown = shutdown.clone();
                 tokio::select! {
                     _ = shutdown.cancelled() => {
                         break;
@@ -89,6 +90,7 @@ impl Http {
 
                         tokio::spawn(async move {
                             let io = TokioIo::new(stream);
+
                             let handler = async move {
                                 let new_service = service_fn(move |req| {
                                     let http_tunnel = this.clone();
@@ -98,7 +100,13 @@ impl Http {
                                         )
                                     }
                                 });
-                                http1_builder.serve_connection(io, new_service).await
+
+                                tokio::select! {
+                                    _ = shutdown.cancelled() => {}
+                                    _ = http1_builder.serve_connection(io, new_service) => {
+                                        info!("http1 connection closed");
+                                    }
+                                }
                             }.instrument(info_span!("vhttp_handler"));
                             tokio::task::spawn(handler);
                         });
@@ -140,6 +148,7 @@ impl Http {
         let data_sender = bridge.data_sender.clone();
         let remove_bridge_sender = bridge.remove_bridge_sender.clone();
         let client_cancel_receiver = bridge.client_cancel_receiver.clone();
+
         tokio::spawn(async move {
             data_sender
                 .send(headers)
@@ -153,15 +162,23 @@ impl Http {
             loop {
                 tokio::select! {
                     _ = client_cancel_receiver.cancelled() => {
-                        break;
+                        return;
                     }
                     data = body_stream.try_next() => {
                         match data {
                             Ok(Some(data)) => {
-                                let _ = data_sender.send(data.to_vec()).await;
+                                data_sender.send(data.to_vec()).await.unwrap();
                             }
-                            _ => {
-                                break;
+                            Ok(None) => {
+                                // TODO(sword): reafctor this logic into io module
+                                // sending a empty vec to indicate the end of the body
+                                // then io::copy() will finish the transfer on the client side.
+                                data_sender.send(vec![]).await.unwrap();
+                                return;
+                            }
+                            Err(err) => {
+                                error!(err = ?err, "failed to read body stream");
+                                return;
                             }
                         }
                     }

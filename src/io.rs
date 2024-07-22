@@ -200,7 +200,7 @@ impl<T: Send + Debug> StreamingWriter<T> {
         &self,
         _cx: &mut Context<'_>,
     ) -> Poll<std::result::Result<(), std::io::Error>> {
-        debug!("flushing streaming writer");
+        debug!("flushing streaming");
         Poll::Ready(Ok(()))
     }
 
