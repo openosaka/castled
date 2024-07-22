@@ -3,6 +3,7 @@
 cd "$(dirname "$0")"
 
 go build -o .bin/ ./ping/ping.go
+go build -o .bin/file_server ./file_server/main.go
 
 wait_port() {
     local port=$1

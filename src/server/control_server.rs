@@ -394,11 +394,17 @@ impl TunnelService for ControlHandler {
                                                 tokio::select! {
                                                     // server -> client
                                                     Some(data) = transfer_rx.recv() => {
-                                                        outbound_tx
-                                                            .send(Ok(TrafficToClient { data }))
-                                                            .await
-                                                            .context("failed to send traffic to outbound channel")
-                                                            .unwrap();
+                                                        // read data chunk by chunk(8K), then send to the client
+                                                        for data in data.chunks(8192) {
+                                                            if data.is_empty() {
+                                                                break;
+                                                            }
+                                                            outbound_tx
+                                                                .send(Ok(TrafficToClient { data: data.to_vec() }))
+                                                                .await
+                                                                .context("failed to send traffic to outbound channel")
+                                                                .unwrap();
+                                                        }
                                                     }
                                                     _ = close_sender_listener.cancelled() => {
                                                         // after connection is removed, this listener will be notified
