@@ -4,7 +4,6 @@ use crate::helper::create_tcp_listener;
 
 use super::{init_data_sender_bridge, BridgeResult};
 use anyhow::{Context as _, Result};
-use async_shutdown::{ShutdownManager, ShutdownSignal};
 use bytes::{BufMut as _, Bytes};
 use dashmap::DashMap;
 use futures::TryStreamExt;
@@ -171,10 +170,13 @@ impl Http {
                     data = body_stream.try_next() => {
                         match data {
                             Ok(Some(data)) => {
-                                let _ = data_sender.send(data.to_vec()).await;
+                                data_sender.send(data.to_vec()).await.unwrap();
                             }
                             Ok(None) => {
-                                // TODO(sword): wait for finish the tunneling
+                                // TODO(sword): reafctor this logic into io module
+                                // sending a empty vec to indicate the end of the body
+                                // then io::copy() will finish the transfer on the client side.
+                                data_sender.send(vec![]).await.unwrap();
                                 return;
                             }
                             Err(err) => {
