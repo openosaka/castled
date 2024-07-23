@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let client = Client::new(args.server_addr);
+    let client = Client::new(args.server_addr).await.unwrap();
     let tunnel;
     let shutdown: ShutdownManager<i8> = ShutdownManager::new();
     let wait_complete = shutdown.wait_shutdown_complete();
