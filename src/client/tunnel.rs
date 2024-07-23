@@ -1,67 +1,87 @@
+//! Tunnel configuration for the client.
+//! Before starting a tunnel, you need to create a tunnel by this module.
 use std::net::SocketAddr;
 
 use bytes::Bytes;
 
-use crate::pb::{
-    self,
-    tunnel::{self, Type},
-    HttpConfig, TcpConfig, UdpConfig,
-};
+use crate::pb::{self, tunnel, HttpConfig, TcpConfig, UdpConfig};
 
-pub struct Tunnel {
-    pub(crate) inner: pb::Tunnel,
+/// Tunnel configuration for the client.
+#[derive(Debug)]
+pub struct Tunnel<'a> {
+    pub(crate) name: &'a str,
     pub(crate) local_endpoint: SocketAddr,
+    pub(crate) config: RemoteConfig<'a>,
 }
 
-pub fn new_tcp_tunnel(name: &str, local_endpoint: SocketAddr, remote_port: u16) -> Tunnel {
-    Tunnel {
-        inner: pb::Tunnel {
-            name: name.to_string(),
-            r#type: Type::Tcp as i32,
-            config: Some(tunnel::Config::Tcp(TcpConfig {
-                remote_port: remote_port as i32,
-            })),
-            ..Default::default()
-        },
-        local_endpoint,
+impl<'a> Tunnel<'a> {
+    /// Create a new tunnel.
+    pub fn new(name: &'a str, local_endpoint: SocketAddr, config: RemoteConfig<'a>) -> Self {
+        Self {
+            name,
+            local_endpoint,
+            config,
+        }
     }
 }
 
-pub fn new_udp_tunnel(name: &str, local_endpoint: SocketAddr, remote_port: u16) -> Tunnel {
-    Tunnel {
-        inner: pb::Tunnel {
+/// configuration for the http tunnel.
+#[derive(Debug, Default)]
+pub enum HttpRemoteConfig<'a> {
+    Domain(&'a str),
+    Subdomain(&'a str),
+    RandomSubdomain,
+    Port(u16),
+    #[default]
+    RandomPort,
+}
+
+/// Remote configuration for the tunnel.
+#[derive(Debug)]
+pub enum RemoteConfig<'a> {
+    Udp(u16),
+    Tcp(u16),
+    Http(HttpRemoteConfig<'a>),
+}
+
+impl<'a> RemoteConfig<'a> {
+    pub(crate) fn to_pb_tunnel(&self, name: &str) -> pb::Tunnel {
+        let mut pb_tunnel = pb::Tunnel {
             name: name.to_string(),
-            r#type: Type::Udp as i32,
-            config: Some(tunnel::Config::Udp(UdpConfig {
-                remote_port: remote_port as i32,
-            })),
             ..Default::default()
-        },
-        local_endpoint,
+        };
+
+        match self {
+            Self::Udp(port) => {
+                pb_tunnel.config = Some(tunnel::Config::Udp(UdpConfig {
+                    remote_port: *port as i32,
+                }));
+            }
+            Self::Tcp(port) => {
+                pb_tunnel.config = Some(tunnel::Config::Tcp(TcpConfig {
+                    remote_port: *port as i32,
+                }));
+            }
+            Self::Http(config) => {
+                pb_tunnel.config = Some(tunnel::Config::Http(config.get_http_config()));
+            }
+        }
+
+        pb_tunnel
     }
 }
 
-pub fn new_http_tunnel<'a>(
-    name: &'a str,
-    local_endpoint: SocketAddr,
-    domain: &'a str,
-    subdomain: &'a str,
-    random_subdomain: bool,
-    remote_port: u16,
-) -> Tunnel {
-    Tunnel {
-        inner: pb::Tunnel {
-            name: name.to_string(),
-            r#type: Type::Http as i32,
-            config: Some(tunnel::Config::Http(get_http_config(
-                Bytes::copy_from_slice(domain.as_bytes()),
-                Bytes::copy_from_slice(subdomain.as_bytes()),
-                random_subdomain,
-                remote_port,
-            ))),
-            ..Default::default()
-        },
-        local_endpoint,
+impl HttpRemoteConfig<'_> {
+    fn get_http_config(&self) -> HttpConfig {
+        match self {
+            Self::Domain(domain) => domain_config(Bytes::copy_from_slice(domain.as_bytes())),
+            Self::Subdomain(subdomain) => {
+                subdomain_config(Bytes::copy_from_slice(subdomain.as_bytes()))
+            }
+            Self::RandomSubdomain => random_subdomain_config(),
+            Self::Port(port) => remote_port_config(*port),
+            Self::RandomPort => random_remote_port_config(),
+        }
     }
 }
 
@@ -108,24 +128,5 @@ fn random_remote_port_config() -> HttpConfig {
         remote_port: 0,
         subdomain: String::new(),
         random_subdomain: false,
-    }
-}
-
-fn get_http_config(
-    domain: Bytes,
-    subdomain: Bytes,
-    random_subdomain: bool,
-    remote_port: u16,
-) -> HttpConfig {
-    if !domain.is_empty() {
-        domain_config(domain)
-    } else if !subdomain.is_empty() {
-        subdomain_config(subdomain)
-    } else if remote_port != 0 {
-        remote_port_config(remote_port)
-    } else if random_subdomain {
-        random_subdomain_config()
-    } else {
-        random_remote_port_config()
     }
 }
