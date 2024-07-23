@@ -13,10 +13,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-go@v5
-    - name: Install Protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
     - name: Clippy
       run: cargo clippy -- -D warnings
     - name: Build
@@ -28,6 +24,15 @@ jobs:
       run: cargo test --locked --all-features --doc
     - name: e2e test
       run: make e2e
+  go-sdk:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+    - name: go vet
+      run: go vet ./...
+    - name: go test
+      run: go test -v ./...
   run-examples:
     runs-on: ubuntu-latest
     steps:

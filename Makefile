@@ -13,11 +13,14 @@ ifeq ($(ENABLE_TOKIO_CONSOLE), 1)
 endif
 
 PWD := $(shell pwd)
-PROTOC_GEN_GO = $(PWD)/bin/protoc-gen-go
+PROTOC_GEN_GO = $(PWD)/.bin/protoc-gen-go
+PROTOC_GEN_GO_GRPC = $(PWD)/.bin/protoc-gen-go-grpc
 BUF_VERSION = 1.34.0
 BUF = $(PWD)/.bin/buf
 RUN_BUF = PATH=$(PWD)/.bin:$$PATH $(BUF)
 PROTOC_GEN_GO_VERSION := $(shell awk '/google.golang.org\/protobuf/ {print substr($$2, 2)}' go.mod)
+# https://pkg.go.dev/google.golang.org/grpc/cmd/protoc-gen-go-grpc
+PROTOC_GEN_GO_GRPC_VERSION := 1.4.0
 
 EXAMPLES = \
 	crawler
@@ -73,8 +76,8 @@ update-deps: $(BUF)
 	go get -u ./...
 
 .PHONY: generate-proto
-generate-proto: $(BUF) $(PROTOC_GEN_GO)
-	$(RUN_BUF) generate
+generate-proto: $(BUF) $(PROTOC_GEN_GO) $(PROTOC_GEN_GO_GRPC)
+	$(RUN_BUF) generate -v --debug
 
 .PHONY: build-examples
 build-examples:
@@ -103,3 +106,7 @@ $(BUF):
 $(PROTOC_GEN_GO):
 	mkdir -p .bin
 	GOBIN=$(PWD)/.bin go install google.golang.org/protobuf/cmd/protoc-gen-go@v$(PROTOC_GEN_GO_VERSION)
+
+$(PROTOC_GEN_GO_GRPC):
+	mkdir -p .bin
+	GOBIN=$(PWD)/.bin go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v$(PROTOC_GEN_GO_GRPC_VERSION)
