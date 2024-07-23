@@ -76,7 +76,9 @@ async fn main() -> anyhow::Result<()> {
     let castled_client = castled::client::Client::new(SocketAddr::new(
         IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         CASTLED_CONTROL_PORT,
-    ));
+    ))
+    .await
+    .unwrap();
     let mock_host = "mock.test";
     let shutdown = ShutdownManager::new();
     let _ = castled_client

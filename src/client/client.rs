@@ -27,17 +27,20 @@ use super::tunnel::Tunnel;
 /// Client represents a castle client that can register tunnels with the server.
 #[derive(Clone)]
 pub struct Client {
-    control_addr: SocketAddr,
+    grpc_client: TunnelServiceClient<Channel>,
 }
 
 impl Client {
     /// Creates a new `Client` instance with the specified control address.
     ///
     /// ```
-    /// let client = castled::client::Client::new("127.0.0.1:6100".parse().unwrap());
+    /// async fn run() {
+    ///     let client = castled::client::Client::new("127.0.0.1:6100".parse().unwrap()).await.unwrap();
+    /// }
     /// ```
-    pub fn new(addr: SocketAddr) -> Self {
-        Self { control_addr: addr }
+    pub async fn new(addr: SocketAddr) -> Result<Self> {
+        let grpc_client = new_rpc_client(addr).await?;
+        Ok(Self { grpc_client })
     }
 
     /// Registers a tunnel with the server and returns a future that represents the tunnel handler.
@@ -56,7 +59,7 @@ impl Client {
     /// use async_shutdown::ShutdownManager;
     ///
     /// async fn run1() {
-    ///     let client = Client::new("127.0.0.1:6100".parse().unwrap());
+    ///     let client = Client::new("127.0.0.1:6100".parse().unwrap()).await.unwrap();
     ///     let tunnel = Tunnel::new("my-tunnel", SocketAddr::from(([127, 0, 0, 1], 8971)), RemoteConfig::Tcp(8080));
     ///     let shutdown = ShutdownManager::new();
     ///     let entrypoint = client.start_tunnel(tunnel, shutdown.clone()).await.unwrap();
@@ -65,7 +68,7 @@ impl Client {
     /// }
     ///
     /// async fn run2() {
-    ///     let client = Client::new("127.0.0.1:6100".parse().unwrap());
+    ///     let client = Client::new("127.0.0.1:6100".parse().unwrap()).await.unwrap();
     ///     let tunnel = Tunnel::new("my-tunnel", SocketAddr::from(([127, 0, 0, 1], 8971)), RemoteConfig::Http(HttpRemoteConfig::RandomSubdomain));
     ///     let shutdown = ShutdownManager::new();
     ///     let entrypoint = client.start_tunnel(tunnel, shutdown.clone()).await.unwrap();
@@ -194,7 +197,7 @@ impl Client {
         local_endpoint: SocketAddr,
         hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
     ) -> Result<()> {
-        let mut rpc_client = self.new_rpc_client().await?;
+        let mut rpc_client = self.grpc_client.clone();
         let is_udp = matches!(tunnel.config, Some(Config::Udp(_)));
         let register = self.register_tunnel(&mut rpc_client, tunnel);
 
@@ -310,17 +313,16 @@ impl Client {
         }
         Ok(())
     }
+}
 
-    /// Creates a new RPC client and connects to the server.
-    #[instrument(skip(self))]
-    async fn new_rpc_client(&self) -> Result<TunnelServiceClient<Channel>> {
-        debug!("connecting server");
+#[instrument]
+async fn new_rpc_client(control_addr: SocketAddr) -> Result<TunnelServiceClient<Channel>> {
+    debug!("connecting server");
 
-        TunnelServiceClient::connect(format!("http://{}", self.control_addr))
-            .await
-            .context("Failed to connect to the server")
-            .map_err(Into::into)
-    }
+    TunnelServiceClient::connect(format!("http://{}", control_addr))
+        .await
+        .context("Failed to connect to the server")
+        .map_err(Into::into)
 }
 
 /// Handles the work traffic from the server to the local endpoint.

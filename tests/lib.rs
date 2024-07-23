@@ -39,7 +39,7 @@ async fn client_register_tcp() {
     let control_addr = server.control_addr().clone();
 
     let client_handler = tokio::spawn(async move {
-        let client = Client::new(control_addr);
+        let client = Client::new(control_addr).await.unwrap();
         let entrypoint = client
             .start_tunnel(
                 Tunnel::new(
@@ -86,7 +86,7 @@ async fn client_register_and_close_then_register_again() {
 
     let control_addr = server.control_addr();
     let client_handler = tokio::spawn(async move {
-        let client = Client::new(control_addr);
+        let client = Client::new(control_addr).await.unwrap();
         let _ = client
             .start_tunnel(
                 Tunnel::new(
@@ -112,7 +112,7 @@ async fn client_register_and_close_then_register_again() {
     let close_client = shutdown.clone();
     let control_addr = server.control_addr().clone();
     let client_handler = tokio::spawn(async move {
-        let client = Client::new(control_addr);
+        let client = Client::new(control_addr).await.unwrap();
         let _ = client
             .start_tunnel(
                 Tunnel::new(
@@ -157,7 +157,7 @@ async fn register_http_tunnel_with_subdomain() {
 
     let (wait_client_register, wait_client_register_rx) = oneshot::channel();
     let client_handler = tokio::spawn(async move {
-        let client = Client::new(control_addr);
+        let client = Client::new(control_addr).await.unwrap();
         let _ = client
             .start_tunnel(
                 Tunnel::new(
@@ -407,7 +407,7 @@ async fn test_assigned_entrypoint() {
             let control_addr = server.control_addr();
 
             let client_handler = tokio::spawn(async move {
-                let client = Client::new(control_addr);
+                let client = Client::new(control_addr).await.unwrap();
                 let entrypoint = client.start_tunnel(tunnel.tunnel, close_client).await;
                 assert!(entrypoint.is_ok());
                 let entrypoint = entrypoint.unwrap();
