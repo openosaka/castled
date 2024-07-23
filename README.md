@@ -38,4 +38,5 @@ Basically, this tunnel is primarily for this purpose. If you want to expose your
 	- random subdomain if `--random-subdomain` is specified
 	- random remote port if not specified
 	- support http/1.1
+	  - Upload file
 	- [ ] support http/2

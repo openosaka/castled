@@ -7,7 +7,8 @@ use anyhow::{Context as _, Result};
 use bytes::{BufMut as _, Bytes};
 use dashmap::DashMap;
 use futures::TryStreamExt;
-use http::HeaderValue;
+use http::response::Builder;
+use http::{HeaderValue, StatusCode};
 use http_body::Frame;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyDataStream, BodyExt, Full, StreamBody};
@@ -15,6 +16,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Request, Response};
 use hyper_util::rt::TokioIo;
+use std::cell::Cell;
 use std::convert::Infallible;
 use std::io::Write;
 use std::sync::Arc;
@@ -188,7 +190,7 @@ impl Http {
 
         // response to user http request by sending data to outbound_rx
         let (body_tx, body_rx) = mpsc::channel::<Result<Frame<Bytes>, Infallible>>(1024);
-        let (header_tx, header_rx) = oneshot::channel::<Vec<u8>>();
+        let (header_tx, header_rx) = oneshot::channel::<Result<Builder>>();
 
         let client_cancel_receiver = bridge.client_cancel_receiver.clone();
 
@@ -209,50 +211,145 @@ impl Http {
                     .unwrap()
             }
             header = header_rx => {
-                let header_buf = header.unwrap();
-                let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
-                let mut resp = httparse::Response::new(&mut headers);
-                if let Err(err) = resp.parse(&header_buf) {
-                    error!(err = ?err, "failed to parse response header");
-                    return Response::builder()
-                        .status(500)
-                        .body(BoxBody::new(Full::new(Bytes::from_static(b"failed to parse response header"))))
-                        .unwrap();
-                }
-                if resp.code.is_none() {
-                    return Response::builder()
-                        .status(500)
-                        .body(BoxBody::new(Full::new(Bytes::from_static(b"invalid response header: no status"))))
-                        .unwrap();
-                }
-
-                let mut http_builder = Response::builder().status(resp.code.unwrap())
-                    .version(match resp.version {
-                        Some(0) => http::Version::HTTP_10,
-                        _ => http::Version::HTTP_11,
-                    });
-                for header in resp.headers {
-                    http_builder = http_builder.header(header.name, header.value);
+                // get response builder from header
+                let http_builder = header.unwrap();
+                match http_builder {
+                    Ok(http_builder) => {
+                        let stream = ReceiverStream::new(body_rx);
+                        let body = BoxBody::new(StreamBody::new(stream));
+                        http_builder.body(body).unwrap()
+                    },
+                    Err(err) => {
+                        error!(err = ?err, "failed to get response builder");
+                        Response::builder()
+                            .status(500)
+                            .body(BoxBody::new(Full::new(Bytes::from_static(b"failed to get response builder"))))
+                            .unwrap()
+                    },
                 }
 
-                let stream = ReceiverStream::new(body_rx);
-                let body = BoxBody::new(StreamBody::new(stream));
-                http_builder.body(body).unwrap()
+                // let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+                // let mut resp = httparse::Response::new(&mut headers);
+                // if let Err(err) = resp.parse(&header_buf) {
+                //     error!(err = ?err, "failed to parse response header");
+                //     return Response::builder()
+                //         .status(500)
+                //         .body(BoxBody::new(Full::new(Bytes::from_static(b"failed to parse response header"))))
+                //         .unwrap();
+                // }
+                // if resp.code.is_none() {
+                //     error!("invalid response header: no status");
+                //     return Response::builder()
+                //         .status(500)
+                //         .body(BoxBody::new(Full::new(Bytes::from_static(b"invalid response header: no status"))))
+                //         .unwrap();
+                // }
+
+                // let mut http_builder = Response::builder().status(resp.code.unwrap())
+                //     .version(match resp.version {
+                //         Some(0) => http::Version::HTTP_10,
+                //         _ => http::Version::HTTP_11,
+                //     });
+                // for header in resp.headers {
+                //     http_builder = http_builder.header(header.name, header.value);
+                // }
             }
         }
     }
 }
 
+struct ResponseHeaderScanner {
+    buf_cell: Cell<Vec<u8>>,
+    ended: bool,
+    pos: usize,
+}
+
+impl ResponseHeaderScanner {
+    fn new(buf_size: usize) -> Self {
+        Self {
+            buf_cell: Cell::new(Vec::with_capacity(buf_size)),
+            ended: false,
+            pos: 0,
+        }
+    }
+
+    fn split_parts(&mut self) -> (&[u8], &[u8]) {
+        let buffer = self.buf_cell.get_mut();
+        buffer.split_at(self.pos)
+    }
+
+    /// Helper function to find the end of the header (\r\n\r\n) in the buffer.
+    /// Returns true if the end of the header if it found.
+    fn scan(&mut self, new_buf: Vec<u8>) -> bool {
+        let buffer = self.buf_cell.get_mut();
+        buffer.extend_from_slice(&new_buf);
+        for i in self.pos..buffer.len() - 3 {
+            if buffer[i] == b'\r'
+                && buffer[i + 1] == b'\n'
+                && buffer[i + 2] == b'\r'
+                && buffer[i + 3] == b'\n'
+            {
+                self.pos = i + 4;
+                self.ended = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn parse(&mut self) -> Result<Option<(Builder, Vec<u8>)>> {
+        let (header_part, body_part) = self.split_parts();
+        let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+        let mut resp = httparse::Response::new(&mut headers);
+        resp.parse(header_part)?;
+        if resp.code.is_none() {
+            return Err(anyhow::anyhow!("invalid response header: no status"));
+        }
+
+        if resp.code.unwrap() == StatusCode::CONTINUE {
+            // discard 100-continue, because the hyper server has handled it.
+            // continue to look for the next header end.
+            let mut new_header = Vec::with_capacity(MAX_HEADER_SIZE);
+            new_header.extend_from_slice(body_part);
+            self.reset(new_header);
+            return Ok(None);
+        }
+
+        let mut http_builder =
+            Response::builder()
+                .status(resp.code.unwrap())
+                .version(match resp.version {
+                    Some(0) => http::Version::HTTP_10,
+                    _ => http::Version::HTTP_11,
+                });
+        for header in resp.headers {
+            http_builder = http_builder.header(header.name, header.value);
+        }
+        Ok(Some((http_builder, body_part.to_vec())))
+    }
+
+    fn move_back(&mut self, n: usize) {
+        self.pos = self.pos.saturating_sub(n);
+    }
+
+    fn reset(&mut self, buffer: Vec<u8>) {
+        self.ended = false;
+        self.pos = 0;
+        self.buf_cell.set(buffer);
+    }
+}
+
 async fn receive_response(
     mut data_receiver: mpsc::Receiver<BridgeData>,
-    mut header_tx: Option<oneshot::Sender<Vec<u8>>>,
+    mut header_tx: Option<oneshot::Sender<Result<Builder>>>,
     body_tx: mpsc::Sender<Result<Frame<Bytes>, Infallible>>,
     client_cancel_receiver: CancellationToken,
     remove_bridge_sender: CancellationToken,
 ) {
-    let mut header = Vec::with_capacity(MAX_HEADER_SIZE);
-    let mut header_ended = false;
-    let mut scan_buf_start = 0;
+    // let mut header_cell = Cell::new(Vec::with_capacity(MAX_HEADER_SIZE));
+    // let mut header_ended = false;
+    // let mut scan_buf_start = 0;
+    let mut header_scanner = ResponseHeaderScanner::new(MAX_HEADER_SIZE);
 
     loop {
         tokio::select! {
@@ -263,7 +360,7 @@ async fn receive_response(
                 match data {
                     BridgeData::Data(data) => {
                         if data.is_empty() {
-                            if !header_ended {
+                            if !header_scanner.ended {
                                 // this spawn will drop the body_tx and header_tx
                                 error!("unexpected empty data, header not ended");
                             }
@@ -271,20 +368,24 @@ async fn receive_response(
                             break;
                         }
 
-                        if !header_ended {
-                            header.extend_from_slice(&data);
-                            if let Some(header_end_pos) = find_header_end(&header, scan_buf_start) {
-                                header_ended = true;
-                                let (header_part, body_part) = header.split_at(header_end_pos + 1);
-                                if let Some(header_tx) = header_tx.take() {
-                                    header_tx.send(header_part.to_vec()).unwrap();
+                        if !header_scanner.ended {
+                            if header_scanner.scan(data) {
+                                match header_scanner.parse() {
+                                    Err(err) => {
+                                        header_tx.take().unwrap().send(Err(err)).unwrap();
+                                        break;
+                                    }
+                                    Ok(None) => {
+                                        continue
+                                    }
+                                    Ok(Some((http_builder, body_part))) => {
+                                        header_tx.take().unwrap().send(Ok(http_builder)).unwrap();
+                                        let frame = Frame::data(Bytes::from(body_part.to_vec()));
+                                        let _ = body_tx.send(Ok(frame)).await;
+                                    }
                                 }
-
-                                let frame = Frame::data(Bytes::from(body_part.to_vec()));
-                                let _ = body_tx.send(Ok(frame)).await;
-
                             } else {
-                                scan_buf_start = header.len().saturating_sub(3); // min: 0
+                                header_scanner.move_back(4); // min: 0
                             }
                         } else {
                             let frame = Frame::data(Bytes::from(data));
@@ -415,21 +516,6 @@ impl DynamicRegistry {
     }
 }
 
-/// Helper function to find the end of the header (\r\n\r\n) in the buffer.
-/// Returns the position of the end of the header if found, otherwise None.
-fn find_header_end(buffer: &[u8], start: usize) -> Option<usize> {
-    for i in start..buffer.len() - 3 {
-        if buffer[i] == b'\r'
-            && buffer[i + 1] == b'\n'
-            && buffer[i + 2] == b'\r'
-            && buffer[i + 3] == b'\n'
-        {
-            return Some(i + 3);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod test {
     use std::pin::Pin;
@@ -496,7 +582,7 @@ mod test {
                     + Sync
                     + 'a,
             >,
-            expected_header: &'a [u8],
+            expected_header: &'a str,
             expected_body: &'a [u8],
         }
 
@@ -507,12 +593,12 @@ mod test {
                     Box::pin(async move {
                         let _ = tx
                             .send(BridgeData::Data(
-                                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".to_vec(),
+                                b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\nhello".to_vec(),
                             ))
                             .await;
                     })
                 }),
-                expected_header: b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n",
+                expected_header: "HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\n",
                 expected_body: b"hello",
             },
             Case {
@@ -527,7 +613,7 @@ mod test {
                             .await;
                     })
                 }),
-                expected_header: b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n",
+                expected_header: "HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\n",
                 expected_body: b"hello",
             },
             Case {
@@ -536,13 +622,30 @@ mod test {
                     Box::pin(async move {
                         let _ = tx
                             .send(BridgeData::Data(
-                                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n".to_vec(),
+                                b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\n".to_vec(),
                             ))
                             .await;
                         let _ = tx.send(BridgeData::Data(b"\r\nhello".to_vec())).await;
                     })
                 }),
-                expected_header: b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n",
+                expected_header: "HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\n",
+                expected_body: b"hello",
+            },
+            Case {
+                name: "response 100 then response 200",
+                send_fn: Box::new(|tx| {
+                    Box::pin(async move {
+                        let _ = tx
+                            .send(BridgeData::Data(b"HTTP/1.1 100 Continue\r\n\r\n".to_vec()))
+                            .await;
+                        let _ = tx
+                            .send(BridgeData::Data(
+                                b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\nhello".to_vec(),
+                            ))
+                            .await;
+                    })
+                }),
+                expected_header: "HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\n",
                 expected_body: b"hello",
             },
         ];
@@ -567,8 +670,8 @@ mod test {
             ));
 
             (case.send_fn)(data_tx).await;
-            let header = header_rx.await.unwrap();
-            assert_eq!(header, case.expected_header);
+            let http_builder = header_rx.await.unwrap().unwrap();
+            assert_eq!(http_builder_to_string(http_builder), case.expected_header);
             let body = body_rx.recv().await.unwrap().unwrap();
             assert_eq!(
                 body.into_data().unwrap(),
@@ -578,5 +681,21 @@ mod test {
             client_cancel_sender.cancel();
             remove_bridge_receiver.cancelled().await;
         }
+    }
+
+    fn http_builder_to_string<'a>(builder: Builder) -> &'a str {
+        let (parts, _) = builder.body(()).unwrap().into_parts();
+        let mut buf = String::new();
+        buf.push_str(&format!(
+            "{:?} {:?} {}\r\n",
+            parts.version,
+            parts.status,
+            parts.status.canonical_reason().unwrap(),
+        ));
+        for (key, value) in parts.headers.iter() {
+            buf.push_str(&format!("{}: {}\r\n", key, value.to_str().unwrap()));
+        }
+        buf.push_str("\r\n");
+        Box::leak(buf.into_boxed_str())
     }
 }

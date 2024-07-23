@@ -1,7 +1,7 @@
 use crate::event::ClientEventResponse;
 use crate::helper::validate_register_req;
 use crate::pb::{traffic_to_server, TrafficToServer};
-use crate::{bridge, event};
+use crate::{bridge, constant, event};
 use crate::{
     io::CancellableReceiver,
     pb::{
@@ -394,16 +394,24 @@ impl TunnelService for ControlHandler {
                                                 tokio::select! {
                                                     // server -> client
                                                     Some(data) = transfer_rx.recv() => {
-                                                        // read data chunk by chunk(8K), then send to the client
-                                                        for data in data.chunks(8192) {
-                                                            if data.is_empty() {
-                                                                break;
-                                                            }
+                                                        if data.len() <= constant::DEFAULT_BUF_SIZE {
                                                             outbound_tx
-                                                                .send(Ok(TrafficToClient { data: data.to_vec() }))
+                                                                .send(Ok(TrafficToClient { data }))
                                                                 .await
                                                                 .context("failed to send traffic to outbound channel")
                                                                 .unwrap();
+                                                        } else {
+                                                            // read data chunk by chunk, then send to the client
+                                                            // if data is empty, the first chunk will be none.
+                                                            // which means we have no change to send the data.
+                                                            // so if the length of data is less than 8192, we can send it directly.
+                                                            for data in data.chunks(constant::DEFAULT_BUF_SIZE) {
+                                                                outbound_tx
+                                                                    .send(Ok(TrafficToClient { data: data.to_vec() }))
+                                                                    .await
+                                                                    .context("failed to send traffic to outbound channel")
+                                                                    .unwrap();
+                                                            }
                                                         }
                                                     }
                                                     _ = close_sender_listener.cancelled() => {

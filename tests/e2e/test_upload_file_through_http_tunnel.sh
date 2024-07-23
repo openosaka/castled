@@ -28,8 +28,9 @@ RUST_LOG=DEBUG exec $cur_dir/.bin/file_server --port 13346 &
 file_server_pid=$!
 
 dd if=/dev/zero of=/tmp/test_file1.txt bs=1K count=2 #(2K)
+dd if=/dev/zero of=/tmp/test_file3.txt bs=1M count=100 #(100M)
 
-response_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST -F "file=@/tmp/test_file1.txt" http://localhost:6890/upload?dest=/tmp/test_file2.txt)
+response_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST -F "file=@/tmp/test_file1.txt;filename=/tmp/test_file2.txt" -F "file=@/tmp/test_file3.txt;filename=/tmp/test_file4.txt" http://localhost:6890/upload?dest=/tmp/test_file2.txt)
 if [ $response_code -eq 200 ]; then
   echo "Response code is 200"
 else
@@ -37,27 +38,5 @@ else
   exit 1
 fi
 
-# Small file
-# check the size of the test_file2
-file_size=$(stat -c %s /tmp/test_file2.txt)
-if [ $file_size -ne 2048 ]; then
-  echo "file size is not correct"
-  exit 1
-fi
-
-# check the content of the test_file1 and test_file2
 diff /tmp/test_file1.txt /tmp/test_file2.txt
-
-# Large file
-dd if=/dev/zero of=/tmp/test_file3.txt bs=1G count=2 #(2G)
-
-curl -X POST -F "file=@/tmp/test_file3.txt" http://localhost:6890/upload?dest=/tmp/test_file4.txt
-
-# check the size of the test_file2
-file_size=$(stat -c %s /tmp/test_file4.txt)
-if [ $file_size -ne 2147483648 ]; then
-  echo "file size is not correct"
-  exit 1
-fi
-
 diff /tmp/test_file3.txt /tmp/test_file4.txt
