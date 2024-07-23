@@ -6,13 +6,14 @@ use tonic::{transport::Channel, Response, Status, Streaming};
 use tracing::{debug, error, info, instrument, span};
 
 use tokio::{
-    io::{self, AsyncRead, AsyncWrite, AsyncWriteExt},
+    io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
     net::{TcpStream, UdpSocket},
     select,
     sync::{mpsc, oneshot},
 };
 
 use crate::{
+    constant,
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
     pb::{
         self, control::Payload, traffic_to_server, tunnel::Type,
@@ -469,14 +470,19 @@ async fn handle_work_traffic(
 /// 1. remote <=> me
 /// 2. me     <=> local
 async fn forward_traffic_to_local(
-    mut local_r: impl AsyncRead + Unpin,
+    local_r: impl AsyncRead + Unpin,
     mut local_w: impl AsyncWrite + Unpin,
-    mut remote_r: StreamingReader<TrafficToClient>,
+    remote_r: StreamingReader<TrafficToClient>,
     mut remote_w: StreamingWriter<TrafficToServer>,
 ) -> Result<()> {
     let remote_to_me_to_local = async {
         // read from remote, write to local
-        match io::copy(&mut remote_r, &mut local_w).await {
+        match io::copy_buf(
+            &mut BufReader::with_capacity(constant::DEFAULT_BUF_SIZE, remote_r),
+            &mut local_w,
+        )
+        .await
+        {
             Ok(n) => {
                 debug!("copied {} bytes from remote to local", n);
                 let _ = local_w.shutdown().await;
@@ -489,7 +495,12 @@ async fn forward_traffic_to_local(
 
     let local_to_me_to_remote = async {
         // read from local, write to remote
-        match io::copy(&mut local_r, &mut remote_w).await {
+        match io::copy_buf(
+            &mut BufReader::with_capacity(constant::DEFAULT_BUF_SIZE, local_r),
+            &mut remote_w,
+        )
+        .await
+        {
             Ok(n) => {
                 debug!("copied {} bytes from local to remote", n);
                 let _ = remote_w.shutdown().await;
