@@ -39,35 +39,31 @@ pub enum HttpRemoteConfig<'a> {
 /// Remote configuration for the tunnel.
 #[derive(Debug)]
 pub enum RemoteConfig<'a> {
-    Udp(u16),
     Tcp(u16),
+    Udp(u16),
     Http(HttpRemoteConfig<'a>),
 }
 
 impl<'a> RemoteConfig<'a> {
     pub(crate) fn to_pb_tunnel(&self, name: &str) -> pb::Tunnel {
-        let mut pb_tunnel = pb::Tunnel {
+        pb::Tunnel {
             name: name.to_string(),
+            r#type: match self {
+                Self::Udp(_) => tunnel::Type::Udp as i32,
+                Self::Tcp(_) => tunnel::Type::Tcp as i32,
+                Self::Http(_) => tunnel::Type::Http as i32,
+            },
+            config: Some(match self {
+                Self::Udp(port) => tunnel::Config::Udp(UdpConfig {
+                    remote_port: *port as i32,
+                }),
+                Self::Tcp(port) => tunnel::Config::Tcp(TcpConfig {
+                    remote_port: *port as i32,
+                }),
+                Self::Http(config) => tunnel::Config::Http(config.get_http_config()),
+            }),
             ..Default::default()
-        };
-
-        match self {
-            Self::Udp(port) => {
-                pb_tunnel.config = Some(tunnel::Config::Udp(UdpConfig {
-                    remote_port: *port as i32,
-                }));
-            }
-            Self::Tcp(port) => {
-                pb_tunnel.config = Some(tunnel::Config::Tcp(TcpConfig {
-                    remote_port: *port as i32,
-                }));
-            }
-            Self::Http(config) => {
-                pb_tunnel.config = Some(tunnel::Config::Http(config.get_http_config()));
-            }
         }
-
-        pb_tunnel
     }
 }
 

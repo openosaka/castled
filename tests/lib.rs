@@ -5,11 +5,10 @@ use crate::common::is_port_listening;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use async_shutdown::ShutdownManager;
+use castled::client::tunnel::HttpRemoteConfig;
+use castled::client::tunnel::RemoteConfig;
 use castled::{
-    client::{
-        tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel, Tunnel},
-        Client,
-    },
+    client::{tunnel::Tunnel, Client},
     server::{Config, EntrypointConfig, Server},
 };
 use http::HeaderValue;
@@ -43,10 +42,10 @@ async fn client_register_tcp() {
         let client = Client::new(control_addr);
         let entrypoint = client
             .start_tunnel(
-                new_tcp_tunnel(
+                Tunnel::new(
                     "test",
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
-                    remote_port,
+                    RemoteConfig::Tcp(remote_port),
                 ),
                 close_client,
             )
@@ -90,10 +89,10 @@ async fn client_register_and_close_then_register_again() {
         let client = Client::new(control_addr);
         let _ = client
             .start_tunnel(
-                new_tcp_tunnel(
+                Tunnel::new(
                     "test",
                     SocketAddr::from(([127, 0, 0, 1], 8971)),
-                    remote_port,
+                    RemoteConfig::Tcp(remote_port),
                 ),
                 close_client.clone(),
             )
@@ -116,10 +115,10 @@ async fn client_register_and_close_then_register_again() {
         let client = Client::new(control_addr);
         let _ = client
             .start_tunnel(
-                new_tcp_tunnel(
+                Tunnel::new(
                     "test",
                     SocketAddr::from(([127, 0, 0, 1], 8971)), /* no matter */
-                    remote_port,
+                    RemoteConfig::Tcp(remote_port),
                 ),
                 close_client,
             )
@@ -161,13 +160,10 @@ async fn register_http_tunnel_with_subdomain() {
         let client = Client::new(control_addr);
         let _ = client
             .start_tunnel(
-                new_http_tunnel(
+                Tunnel::new(
                     "test",
                     SocketAddr::from(([127, 0, 0, 1], local_port)),
-                    "",
-                    "foo",
-                    false,
-                    0,
+                    RemoteConfig::Http(HttpRemoteConfig::Subdomain("foo")),
                 ),
                 close_client,
             )
@@ -203,7 +199,7 @@ async fn register_http_tunnel_with_subdomain() {
 #[tokio::test]
 async fn test_assigned_entrypoint() {
     struct TestTunnel {
-        tunnel: Tunnel,
+        tunnel: Tunnel<'static>,
         expected: Vec<&'static str>,
     }
 
@@ -217,21 +213,26 @@ async fn test_assigned_entrypoint() {
             entrypoint: Default::default(),
             tunnels: vec![
                 TestTunnel {
-                    tunnel: new_tcp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
+                    tunnel: Tunnel::new(
+                        "test",
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        RemoteConfig::Tcp(8080),
+                    ),
                     expected: vec![],
                 },
                 TestTunnel {
-                    tunnel: new_udp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
-                    expected: vec![],
+                    tunnel: Tunnel::new(
+                        "test",
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        RemoteConfig::Udp(8080),
+                    ),
+                    expected: vec![], // TODO(Sword): assert random port
                 },
                 TestTunnel {
-                    tunnel: new_http_tunnel(
+                    tunnel: Tunnel::new(
                         "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        "",
-                        "",
-                        false,
-                        0,
+                        RemoteConfig::Http(HttpRemoteConfig::RandomPort),
                     ),
                     expected: vec![],
                 },
@@ -244,43 +245,42 @@ async fn test_assigned_entrypoint() {
             },
             tunnels: vec![
                 TestTunnel {
-                    tunnel: new_tcp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
+                    tunnel: Tunnel::new(
+                        "test",
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        RemoteConfig::Tcp(8080),
+                    ),
                     expected: vec!["tcp://example.com:8080"],
                 },
                 TestTunnel {
-                    tunnel: new_udp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
+                    tunnel: Tunnel::new(
+                        "test",
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        RemoteConfig::Udp(8080),
+                    ),
                     expected: vec!["udp://example.com:8080"],
                 },
                 TestTunnel {
-                    tunnel: new_http_tunnel(
+                    tunnel: Tunnel::new(
                         "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        "",
-                        "",
-                        false,
-                        9999,
+                        RemoteConfig::Http(HttpRemoteConfig::Port(9999)),
                     ),
                     expected: vec!["http://example.com:9999"],
                 },
                 TestTunnel {
-                    tunnel: new_http_tunnel(
+                    tunnel: Tunnel::new(
                         "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        "mydomain.com",
-                        "",
-                        false,
-                        9999,
+                        RemoteConfig::Http(HttpRemoteConfig::Domain("mydomain.com")),
                     ),
                     expected: vec!["http://mydomain.com"],
                 },
                 TestTunnel {
-                    tunnel: new_http_tunnel(
+                    tunnel: Tunnel::new(
                         "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        "",
-                        "foo",
-                        false,
-                        9999,
+                        RemoteConfig::Http(HttpRemoteConfig::Subdomain("foo")),
                     ),
                     expected: vec!["http://foo.example.com"],
                 },
@@ -293,43 +293,42 @@ async fn test_assigned_entrypoint() {
             },
             tunnels: vec![
                 TestTunnel {
-                    tunnel: new_tcp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
+                    tunnel: Tunnel::new(
+                        "test",
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        RemoteConfig::Tcp(8080),
+                    ),
                     expected: vec!["tcp://127.0.0.1:8080"],
                 },
                 TestTunnel {
-                    tunnel: new_udp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
+                    tunnel: Tunnel::new(
+                        "test",
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        RemoteConfig::Udp(8080),
+                    ),
                     expected: vec!["udp://127.0.0.1:8080"],
                 },
                 TestTunnel {
-                    tunnel: new_http_tunnel(
+                    tunnel: Tunnel::new(
                         "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        "",
-                        "",
-                        false,
-                        9999,
+                        RemoteConfig::Http(HttpRemoteConfig::Port(9999)),
                     ),
                     expected: vec!["http://127.0.0.1:9999"],
                 },
                 TestTunnel {
-                    tunnel: new_http_tunnel(
+                    tunnel: Tunnel::new(
                         "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        "mydomain.com",
-                        "",
-                        false,
-                        9999,
+                        RemoteConfig::Http(HttpRemoteConfig::Domain("mydomain.com")),
                     ),
                     expected: vec!["http://mydomain.com"],
                 },
                 TestTunnel {
-                    tunnel: new_http_tunnel(
+                    tunnel: Tunnel::new(
                         "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        "",
-                        "foo",
-                        false,
-                        9999,
+                        RemoteConfig::Http(HttpRemoteConfig::Subdomain("foo")),
                     ),
                     expected: vec![/* no assigned entrypoint, because server doesn't has a domain */],
                 },
@@ -344,7 +343,11 @@ async fn test_assigned_entrypoint() {
             },
             tunnels: vec![
                 TestTunnel {
-                    tunnel: new_tcp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
+                    tunnel: Tunnel::new(
+                        "test",
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        RemoteConfig::Tcp(8080),
+                    ),
                     expected: vec![
                         "tcp://127.0.0.1:8080",
                         "tcp://example.com:8080",
@@ -352,7 +355,11 @@ async fn test_assigned_entrypoint() {
                     ],
                 },
                 TestTunnel {
-                    tunnel: new_udp_tunnel("test", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080),
+                    tunnel: Tunnel::new(
+                        "test",
+                        SocketAddr::from(([127, 0, 0, 1], 8971)),
+                        RemoteConfig::Udp(8080),
+                    ),
                     expected: vec![
                         "udp://127.0.0.1:8080",
                         "udp://example.com:8080",
@@ -360,13 +367,10 @@ async fn test_assigned_entrypoint() {
                     ],
                 },
                 TestTunnel {
-                    tunnel: new_http_tunnel(
+                    tunnel: Tunnel::new(
                         "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        "",
-                        "",
-                        false,
-                        9999,
+                        RemoteConfig::Http(HttpRemoteConfig::Port(9999)),
                     ),
                     expected: vec![
                         "http://127.0.0.1:9999",
@@ -375,24 +379,18 @@ async fn test_assigned_entrypoint() {
                     ],
                 },
                 TestTunnel {
-                    tunnel: new_http_tunnel(
+                    tunnel: Tunnel::new(
                         "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        "mydomain.com",
-                        "",
-                        false,
-                        9999,
+                        RemoteConfig::Http(HttpRemoteConfig::Domain("mydomain.com")),
                     ),
                     expected: vec!["https://mydomain.com"],
                 },
                 TestTunnel {
-                    tunnel: new_http_tunnel(
+                    tunnel: Tunnel::new(
                         "test",
                         SocketAddr::from(([127, 0, 0, 1], 8080)),
-                        "",
-                        "bar",
-                        false,
-                        9999,
+                        RemoteConfig::Http(HttpRemoteConfig::Subdomain("bar")),
                     ),
                     expected: vec!["https://bar.example.com", "https://bar.foo.example.com"],
                 },
