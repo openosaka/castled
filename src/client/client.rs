@@ -16,7 +16,7 @@ use crate::{
     constant,
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
     pb::{
-        self, control::Payload, traffic_to_server, tunnel::Type,
+        self, control::Payload, traffic_to_server, tunnel::Config,
         tunnel_service_client::TunnelServiceClient, Command, Control, RegisterReq, TrafficToClient,
         TrafficToServer,
     },
@@ -43,17 +43,30 @@ impl Client {
     /// Registers a tunnel with the server and returns a future that represents the tunnel handler.
     /// Also returns a receiver for receiving the assigned entrypoint from the server.
     ///
+    /// # Example
+    ///
     /// ```no_run
     /// use std::net::SocketAddr;
     /// use castled::client::{
     ///     Client,
-    ///     tunnel::new_tcp_tunnel,
+    ///     tunnel::Tunnel,
+    ///     tunnel::RemoteConfig,
+    ///     tunnel::HttpRemoteConfig,
     /// };
     /// use async_shutdown::ShutdownManager;
     ///
-    /// async fn run() {
+    /// async fn run1() {
     ///     let client = Client::new("127.0.0.1:6100".parse().unwrap());
-    ///     let tunnel = new_tcp_tunnel("my-tunnel", SocketAddr::from(([127, 0, 0, 1], 8971)), 8080);
+    ///     let tunnel = Tunnel::new("my-tunnel", SocketAddr::from(([127, 0, 0, 1], 8971)), RemoteConfig::Tcp(8080));
+    ///     let shutdown = ShutdownManager::new();
+    ///     let entrypoint = client.start_tunnel(tunnel, shutdown.clone()).await.unwrap();
+    ///     println!("entrypoint: {:?}", entrypoint);
+    ///     shutdown.wait_shutdown_complete().await;
+    /// }
+    ///
+    /// async fn run2() {
+    ///     let client = Client::new("127.0.0.1:6100".parse().unwrap());
+    ///     let tunnel = Tunnel::new("my-tunnel", SocketAddr::from(([127, 0, 0, 1], 8971)), RemoteConfig::Http(HttpRemoteConfig::RandomSubdomain));
     ///     let shutdown = ShutdownManager::new();
     ///     let entrypoint = client.start_tunnel(tunnel, shutdown.clone()).await.unwrap();
     ///     println!("entrypoint: {:?}", entrypoint);
@@ -62,15 +75,18 @@ impl Client {
     /// ```
     pub async fn start_tunnel(
         self,
-        tunnel: Tunnel,
+        tunnel: Tunnel<'_>,
         shutdown: ShutdownManager<i8>,
     ) -> Result<Vec<String>> {
         let (entrypoint_tx, entrypoint_rx) = oneshot::channel();
+        let pb_tunnel = tunnel.config.to_pb_tunnel(tunnel.name);
+        let local_endpoint = tunnel.local_endpoint;
 
         tokio::spawn(async move {
             let run_tunnel = self.handle_tunnel(
                 shutdown.wait_shutdown_triggered(),
-                tunnel,
+                pb_tunnel,
+                local_endpoint,
                 Some(move |entrypoint| {
                     let _ = entrypoint_tx.send(entrypoint);
                 }),
@@ -174,12 +190,13 @@ impl Client {
     async fn handle_tunnel(
         &self,
         shutdown: ShutdownSignal<i8>,
-        tunnel: Tunnel,
+        tunnel: pb::Tunnel,
+        local_endpoint: SocketAddr,
         hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
     ) -> Result<()> {
         let mut rpc_client = self.new_rpc_client().await?;
-        let is_udp = tunnel.inner.r#type == Type::Udp as i32;
-        let register = self.register_tunnel(&mut rpc_client, tunnel.inner);
+        let is_udp = matches!(tunnel.config, Some(Config::Udp(_)));
+        let register = self.register_tunnel(&mut rpc_client, tunnel);
 
         tokio::select! {
             _ = shutdown.clone() => {
@@ -191,7 +208,7 @@ impl Client {
                     shutdown.clone(),
                     rpc_client,
                     register_resp,
-                    tunnel.local_endpoint,
+                    local_endpoint,
                     is_udp,
                     hook,
                 ).await

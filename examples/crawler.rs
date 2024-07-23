@@ -5,7 +5,10 @@ use std::{
 };
 
 use async_shutdown::ShutdownManager;
-use castled::{client::tunnel::new_http_tunnel, util};
+use castled::{
+    client::tunnel::{HttpRemoteConfig, RemoteConfig, Tunnel},
+    util,
+};
 use serde::Deserialize;
 use tokio::process::Child;
 use url::form_urlencoded;
@@ -78,13 +81,10 @@ async fn main() -> anyhow::Result<()> {
     let shutdown = ShutdownManager::new();
     let _ = castled_client
         .start_tunnel(
-            new_http_tunnel(
+            Tunnel::new(
                 "foo",
                 in_memory_server.address().to_owned(),
-                mock_host,
-                "",
-                false,
-                0,
+                RemoteConfig::Http(HttpRemoteConfig::Domain(mock_host)),
             ),
             shutdown.clone(),
         )

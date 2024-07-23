@@ -1,7 +1,7 @@
 use async_shutdown::ShutdownManager;
 use castled::{
     client::{
-        tunnel::{new_http_tunnel, new_tcp_tunnel, new_udp_tunnel},
+        tunnel::{HttpRemoteConfig, RemoteConfig, Tunnel},
         Client,
     },
     debug::setup_logging,
@@ -91,7 +91,11 @@ async fn main() -> anyhow::Result<()> {
             local_addr,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            tunnel = new_tcp_tunnel(DEFAULT_TCP_TUNNEL_NAME, local_endpoint, remote_port);
+            tunnel = Tunnel::new(
+                DEFAULT_TCP_TUNNEL_NAME,
+                local_endpoint,
+                RemoteConfig::Tcp(remote_port),
+            );
         }
         Commands::Udp {
             port,
@@ -99,24 +103,35 @@ async fn main() -> anyhow::Result<()> {
             local_addr,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            tunnel = new_udp_tunnel(DEFAULT_UDP_TUNNEL_NAME, local_endpoint, remote_port);
+            tunnel = Tunnel::new(
+                DEFAULT_UDP_TUNNEL_NAME,
+                local_endpoint,
+                RemoteConfig::Udp(remote_port),
+            );
         }
         Commands::Http {
             port,
             local_addr,
-            remote_port,
-            subdomain,
             domain,
+            subdomain,
             random_subdomain,
+            remote_port,
         } => {
             let local_endpoint = parse_socket_addr(&local_addr, port).await?;
-            tunnel = new_http_tunnel(
+            tunnel = Tunnel::new(
                 DEFAULT_HTTP_TUNNEL_NAME,
                 local_endpoint,
-                &domain.unwrap_or_default(),
-                &subdomain.unwrap_or_default(),
-                random_subdomain,
-                remote_port.unwrap_or(0),
+                RemoteConfig::Http(if domain.is_some() {
+                    HttpRemoteConfig::Domain(to_str(domain.unwrap()))
+                } else if subdomain.is_some() {
+                    HttpRemoteConfig::Subdomain(to_str(subdomain.unwrap()))
+                } else if random_subdomain {
+                    HttpRemoteConfig::RandomSubdomain
+                } else if remote_port.is_some() {
+                    HttpRemoteConfig::Port(remote_port.unwrap())
+                } else {
+                    HttpRemoteConfig::RandomPort
+                }),
             );
         }
     }
@@ -136,6 +151,10 @@ async fn main() -> anyhow::Result<()> {
 
     let code = wait_complete.await;
     std::process::exit(code as i32)
+}
+
+fn to_str<'a>(s: String) -> &'a str {
+    Box::leak(s.into_boxed_str())
 }
 
 async fn parse_socket_addr(local_addr: &str, port: u16) -> anyhow::Result<SocketAddr> {

@@ -39,4 +39,5 @@ Basically, this tunnel is primarily for this purpose. If you want to expose your
 	- random remote port if not specified
 	- support http/1.1
 	  - Upload file
+	  - Download file
 	- [ ] support http/2
