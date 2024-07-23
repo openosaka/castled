@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package message;
 
-option go_package = "github.com/castled-dev/castled/proto/message";
+option go_package = "github.com/castled-dev/castled/sdk/go/proto";
 
 service TunnelService {
   // the client sends Register to the server to create a tunnel.
