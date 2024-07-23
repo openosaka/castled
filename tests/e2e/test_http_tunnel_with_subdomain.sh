@@ -24,13 +24,13 @@ server_pid=$!
 wait_port 6610
 
 # Start the tunnel client
-exec $root_dir/target/debug/castle http 13346 --subdomain foo &
+run_client http 13346 --subdomain foo 
 client_pid=$!
 
 sleep 0.5
 
 # test can't bind to the same subdomain
-$root_dir/target/debug/castle http 6666 --subdomain foo
+run_client_block http 6666 --subdomain foo
 error_code=$?
 if [[ $error_code -eq 0 ]]; then
 	error "Test failed: Expected non-zero error code, got $error_code"
@@ -51,10 +51,10 @@ fi
 # kill the client and register again
 kill -SIGINT $client_pid
 sleep 0.5
-exec $root_dir/target/debug/castle http 13346 --subdomain foo &
+run_client http 13346 --subdomain foo 
 client_pid=$!
 
-exec $root_dir/target/debug/castle http 13347 --subdomain bar &
+run_client http 13347 --subdomain bar 
 client_pid2=$!
 exec $cur_dir/.bin/ping --port 13347 &
 http_server_pid2=$!

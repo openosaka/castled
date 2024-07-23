@@ -37,6 +37,22 @@ wait_port_on_udp() {
     exit 1
 }
 
+default_client_binary=$root_dir/target/debug/castle
+
+run_client() {
+    # if pass env CLIENT_BINARY, then use it.
+    # othsewise, use default_client_binary
+    local client_binary=${CLIENT_BINARY:-$default_client_binary}
+    exec $client_binary "$@" &
+}
+
+run_client_block() {
+    # if pass env CLIENT_BINARY, then use it.
+    # othsewise, use default_client_binary
+    local client_binary=${CLIENT_BINARY:-$default_client_binary}
+    $client_binary "$@"
+}
+
 # print red color
 error() {
     echo -e "\033[0;31m$1\033[0m"

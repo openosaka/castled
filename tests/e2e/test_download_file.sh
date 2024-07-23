@@ -21,11 +21,11 @@ exec $root_dir/target/debug/castled &
 server_pid=$!
 wait_port 6610
 
-RUST_LOG=INFO exec $root_dir/target/debug/castle http 13346 --remote-port 6890 &
+run_client http 13346 --remote-port 6890
 client_pid1=$!
 wait_port 6890
 
-RUST_LOG=INFO exec $root_dir/target/debug/castle tcp 13346 --remote-port 6891 &
+run_client tcp 13346 --remote-port 6891
 client_pid2=$!
 wait_port 6891
 

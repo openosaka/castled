@@ -23,7 +23,7 @@ server_pid=$!
 sleep 1
 
 # Start the tunnel client
-exec $root_dir/target/debug/castle tcp 12345 --remote-port 9992 &
+run_client tcp 12345 --remote-port 9992
 client_pid=$!
 
 sleep 1

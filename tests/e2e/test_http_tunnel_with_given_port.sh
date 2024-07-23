@@ -24,12 +24,12 @@ server_pid=$!
 wait_port 6610
 
 # Start the tunnel client
-exec $root_dir/target/debug/castle http 6666 --remote-port 16666 &
+run_client http 6666 --remote-port 16666
 client_pid=$!
 wait_port 16666
 
 # test can't bind to the same remote port
-$root_dir/target/debug/castle http 6666 --remote-port 16666
+run_client_block http 6666 --remote-port 16666
 error_code=$?
 if [[ $error_code -eq 0 ]]; then
 	echo "Test failed: Expected non-zero error code, got $error_code"
@@ -50,11 +50,11 @@ fi
 # kill the client and register again
 kill -SIGINT $client_pid
 sleep 0.5
-exec $root_dir/target/debug/castle http 6666 --remote-port 16666 &
+run_client http 6666 --remote-port 16666
 client_pid=$!
 wait_port 16666
 
-exec $root_dir/target/debug/castle http 6667 --remote-port 16667 &
+run_client http 6667 --remote-port 16667
 client_pid2=$!
 wait_port 16667
 exec $cur_dir/.bin/ping --port 6667 &

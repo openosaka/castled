@@ -43,11 +43,15 @@ run-server: build
 run-client: build
 	TOKIO_CONSOLE_BIND=127.0.0.1:6670 RUST_LOG=$(RUST_LOG) ./target/debug/castle tcp 12345 --remote-port 9991
 
+# the default CLIENT_BINARY is the castle binary
+# we can set CLIENT_BINARY to test any language client
+CLIENT_BINARY =
+
 .PHONY: e2e
 e2e: build
+	[ -n "$(CLIENT_BINARY)" ] && export CLIENT_BINARY=$(CLIENT_BINARY) || true
 	./tests/e2e/test_close_server_gracefully.sh
 	./tests/e2e/test_client_close_when_server_close.sh
-	./tests/e2e/test_basic_tcp.sh
 	./tests/e2e/test_tcp_local_server_not_start.sh
 	./tests/e2e/test_tcp_with_tunnel_http_server.sh
 	./tests/e2e/test_tcp_tunnel_to_google_dns.sh

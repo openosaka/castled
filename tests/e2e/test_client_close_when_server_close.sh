@@ -1,12 +1,16 @@
 #!/bin/bash
 set -x
 
+root_dir=$(git rev-parse --show-toplevel)
+cur_dir=$root_dir/tests/e2e
+source $cur_dir/util.sh
+
 # Start the tunnel server
-exec ./target/debug/castled &
+exec $root_dir/target/debug/castled &
 server_pid=$!
 sleep 1
 
-exec ./target/debug/castle tcp 12348 --remote-port 9992 &
+run_client tcp 12348 --remote-port 9992
 client_pid=$!
 
 sleep 1
