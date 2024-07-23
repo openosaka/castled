@@ -36,7 +36,7 @@ for i in {1..200}
 do
   curl -s http://localhost:9992 > /dev/null 2>&1
   if [ $? -ne 0 ]; then
-    echo "Failed to connect to the castle server"
+    error "Failed to connect to the castle server"
     exit 1
   fi
 done

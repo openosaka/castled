@@ -35,7 +35,7 @@ $root_dir/target/debug/castle http 6666 --domain "foo.com"
 error_code=$?
 echo $error_code
 if [[ $error_code -eq 0 ]]; then
-	echo "Test failed: Expected non-zero error code, got $error_code"
+	error "Test failed: Expected non-zero error code, got $error_code"
 	exit 1
 fi
 
@@ -47,7 +47,7 @@ wait_port 12347
 
 response=$(curl -s -H "Host: foo.com" http://localhost:6611/ping?query=castled)
 if [[ $response != "pong=castled" ]]; then
-	echo "Test failed: Response is not pong=castled, is $response"
+	error "Test failed: Response is not pong=castled, is $response"
 	exit 1
 fi
 
@@ -66,12 +66,12 @@ wait_port 12346
 
 response=$(curl -s -H "Host: foo.com" http://localhost:6611/ping?query=server1)
 if [[ $response != "pong=server1" ]]; then
-	echo "Test failed: Response is not pong=server1, is $response"
+	error "Test failed: Response is not pong=server1, is $response"
 	exit 2
 fi
 
 response=$(curl -s -H "Host: bar.com" http://localhost:6611/ping?query=server2)
 if [[ $response != "pong=server2" ]]; then
-	echo "Test failed: Response is not pong=server1, is $response"
+	error "Test failed: Response is not pong=server1, is $response"
 	exit 3
 fi

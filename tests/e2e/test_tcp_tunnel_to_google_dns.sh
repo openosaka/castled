@@ -25,7 +25,7 @@ output=$(dig @127.0.0.1 -p 10053 +tcp +noedns google.com)
 if echo "$output" | grep -q "ANSWER SECTION"; then
     echo "Test passed: ANSWER SECTION found in dig output"
 else
-    echo "Test failed: ANSWER SECTION not found in dig output"
+    error "Test failed: ANSWER SECTION not found in dig output"
     echo "Output:"
     echo "$output"
     exit 1
