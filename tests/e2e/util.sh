@@ -36,3 +36,8 @@ wait_port_on_udp() {
     echo "Port $port is not available after ${timeout} seconds."
     exit 1
 }
+
+# print red color
+error() {
+    echo -e "\033[0;31m$1\033[0m"
+}

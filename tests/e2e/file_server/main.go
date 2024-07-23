@@ -22,6 +22,26 @@ func main() {
 
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("/download", func(w http.ResponseWriter, r *http.Request) {
+		file := r.URL.Query().Get("file")
+		if file == "" {
+			http.Error(w, "Invalid file", http.StatusBadRequest)
+			return
+		}
+
+		f, err := os.Open(file)
+		if err != nil {
+			http.Error(w, "Unable to open file", http.StatusNotFound)
+			return
+		}
+		defer f.Close()
+
+		if _, err := io.Copy(w, f); err != nil {
+			http.Error(w, "Unable to copy file content", http.StatusInternalServerError)
+			return
+		}
+	})
+
 	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
 		// accept multipart form like
 		// file1=@/path/to/large_file1.txt;filename=/tmp/dest_large_file1.txt

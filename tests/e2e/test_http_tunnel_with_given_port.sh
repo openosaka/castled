@@ -43,7 +43,7 @@ wait_port 6666
 
 response=$(curl -s http://localhost:16666/ping?query=castled)
 if [[ $response != "pong=castled" ]]; then
-	echo "Test failed: Response is not pong=castled"
+	error "Test failed: Response is not pong=castled"
 	exit 1
 fi
 
@@ -63,12 +63,12 @@ wait_port 6667
 
 response=$(curl -s http://localhost:16666/ping?query=server1)
 if [[ $response != "pong=server1" ]]; then
-	echo "Test failed: Response is not pong=castled"
+	error "Test failed: Response is not pong=castled"
 	exit 1
 fi
 
 response=$(curl -s http://localhost:16667/ping?query=server2)
 if [[ $response != "pong=server2" ]]; then
-	echo "Test failed: Response is not pong=castled"
+	error "Test failed: Response is not pong=castled"
 	exit 1
 fi

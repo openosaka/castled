@@ -5,7 +5,7 @@ root_dir=$(git rev-parse --show-toplevel)
 cur_dir=$root_dir/tests/e2e
 source $cur_dir/util.sh
 
-rm -f /tmp/test_file*.txt
+rm -f /tmp/download_file*.txt
 
 cleanup() {
   echo "Cleaning up..."
@@ -32,12 +32,12 @@ wait_port 6891
 RUST_LOG=INFO exec $cur_dir/.bin/file_server --port 13346 &
 file_server_pid=$!
 
-dd if=/dev/zero of=/tmp/test_file1.txt bs=1K count=2 #(2K)
-dd if=/dev/zero of=/tmp/test_file3.txt bs=1M count=100 #(100M)
+dd if=/dev/zero of=/tmp/download_file1.txt bs=1K count=2 #(2K)
+dd if=/dev/zero of=/tmp/download_file3.txt bs=1M count=1 #(1G)
 
 test() {
   port=$1
-  response_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST -F "file=@/tmp/test_file1.txt;filename=/tmp/test_file2.txt" -F "file=@/tmp/test_file3.txt;filename=/tmp/test_file4.txt" "http://localhost:$port/upload?dest=/tmp/test_file2.txt")
+  response_code=$(curl -s -o /tmp/download_file2.txt -w "%{http_code}" -X POST "http://localhost:$port/download?file=/tmp/download_file1.txt")
   if [ $response_code -eq 200 ]; then
     echo "Response code is 200"
   else
@@ -45,8 +45,16 @@ test() {
     exit 1
   fi
 
-  diff /tmp/test_file1.txt /tmp/test_file2.txt
-  diff /tmp/test_file3.txt /tmp/test_file4.txt
+  response_code=$(curl -s -o /tmp/download_file4.txt -w "%{http_code}" -X POST "http://localhost:$port/download?file=/tmp/download_file3.txt")
+  if [ $response_code -eq 200 ]; then
+    echo "Response code is 200"
+  else
+    error "Response code is $response_code"
+    exit 1
+  fi
+
+  diff /tmp/download_file1.txt /tmp/download_file2.txt
+  diff /tmp/download_file3.txt /tmp/download_file4.txt
 }
 
 test 6890
