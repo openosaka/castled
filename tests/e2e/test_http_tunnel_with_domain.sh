@@ -25,13 +25,13 @@ server_pid=$!
 wait_port 6610
 
 # Start the tunnel client
-exec $root_dir/target/debug/castle http 12347 --domain "foo.com" &
+run_client http 12347 --domain "foo.com"
 client_pid=$!
 
 sleep 1
 
 # test can't bind to the same subdomain
-$root_dir/target/debug/castle http 6666 --domain "foo.com"
+run_client_block http 6666 --domain "foo.com"
 error_code=$?
 echo $error_code
 if [[ $error_code -eq 0 ]]; then
@@ -54,10 +54,10 @@ fi
 # kill the client and register again
 kill -SIGINT $client_pid
 sleep 1
-exec $root_dir/target/debug/castle http 12347 --domain foo.com &
+run_client http 12347 --domain foo.com
 client_pid=$!
 
-exec $root_dir/target/debug/castle http 12346 --domain bar.com &
+run_client http 12346 --domain bar.com
 client_pid2=$!
 exec $cur_dir/.bin/ping --port 12346 &
 http_server_pid2=$!

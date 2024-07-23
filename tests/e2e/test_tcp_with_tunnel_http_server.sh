@@ -23,7 +23,7 @@ server_pid=$!
 wait_port 6610
 
 # Start the tunnel client
-exec $root_dir/target/debug/castle tcp 8881 --remote-port 9992 &
+run_client tcp 8881 --remote-port 9992
 client_pid=$!
 wait_port 9992
 

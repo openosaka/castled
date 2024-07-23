@@ -17,7 +17,7 @@ exec $root_dir/target/debug/castled &
 server_pid=$!
 wait_port 6610
 
-exec $root_dir/target/debug/castle udp 53 --remote-port 10053 --local-addr 8.8.8.8 &
+run_client udp 53 --remote-port 10053 --local-addr 8.8.8.8
 client_pid=$!
 wait_port_on_udp 10053
 
