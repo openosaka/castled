@@ -1,21 +1,20 @@
 // @generated
-/// Control is a stream used to control the tunnel.
+/// ControlCommand is the command sent by the server to the client  
+/// which is used to notify the client to do something.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Control {
-    #[prost(enumeration="Command", tag="1")]
-    pub command: i32,
-    #[prost(oneof="control::Payload", tags="2, 3")]
-    pub payload: ::core::option::Option<control::Payload>,
+pub struct ControlCommand {
+    #[prost(oneof="control_command::Payload", tags="1, 2")]
+    pub payload: ::core::option::Option<control_command::Payload>,
 }
-/// Nested message and enum types in `Control`.
-pub mod control {
+/// Nested message and enum types in `ControlCommand`.
+pub mod control_command {
     #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Payload {
-        #[prost(message, tag="2")]
+        #[prost(message, tag="1")]
         Init(super::InitPayload),
-        #[prost(message, tag="3")]
+        #[prost(message, tag="2")]
         Work(super::WorkPayload),
     }
 }
@@ -118,50 +117,19 @@ pub struct Tunnel {
     /// name is the name of the tunnel.
     #[prost(string, tag="2")]
     pub name: ::prost::alloc::string::String,
-    #[prost(enumeration="tunnel::Type", tag="3")]
-    pub r#type: i32,
-    #[prost(oneof="tunnel::Config", tags="4, 5, 6")]
+    #[prost(oneof="tunnel::Config", tags="3, 4, 5")]
     pub config: ::core::option::Option<tunnel::Config>,
 }
 /// Nested message and enum types in `Tunnel`.
 pub mod tunnel {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Type {
-        Tcp = 0,
-        Http = 10,
-        Udp = 20,
-    }
-    impl Type {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Type::Tcp => "TCP",
-                Type::Http => "HTTP",
-                Type::Udp => "UDP",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "TCP" => Some(Self::Tcp),
-                "HTTP" => Some(Self::Http),
-                "UDP" => Some(Self::Udp),
-                _ => None,
-            }
-        }
-    }
     #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Config {
-        #[prost(message, tag="4")]
+        #[prost(message, tag="3")]
         Tcp(super::TcpConfig),
-        #[prost(message, tag="5")]
+        #[prost(message, tag="4")]
         Http(super::HttpConfig),
-        #[prost(message, tag="6")]
+        #[prost(message, tag="5")]
         Udp(super::UdpConfig),
     }
 }
@@ -208,35 +176,6 @@ pub struct UdpConfig {
     /// if remote_port is empty, the server will assign a random port.
     #[prost(int32, tag="1")]
     pub remote_port: i32,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum Command {
-    /// Init command is sent only once as the first control message to the client.
-    Init = 0,
-    /// Work command is sent when a user connection is established,
-    /// then the client needs to start a Data stream to receive and send data.
-    Work = 1,
-}
-impl Command {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Command::Init => "Init",
-            Command::Work => "Work",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "Init" => Some(Self::Init),
-            "Work" => Some(Self::Work),
-            _ => None,
-        }
-    }
 }
 include!("message.tonic.rs");
 // @@protoc_insertion_point(module)

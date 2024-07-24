@@ -48,11 +48,6 @@ impl<'a> RemoteConfig<'a> {
     pub(crate) fn to_pb_tunnel(&self, name: &str) -> pb::Tunnel {
         pb::Tunnel {
             name: name.to_string(),
-            r#type: match self {
-                Self::Udp(_) => tunnel::Type::Udp as i32,
-                Self::Tcp(_) => tunnel::Type::Tcp as i32,
-                Self::Http(_) => tunnel::Type::Http as i32,
-            },
             config: Some(match self {
                 Self::Udp(port) => tunnel::Config::Udp(UdpConfig {
                     remote_port: *port as i32,
