@@ -16,7 +16,6 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Request, Response};
 use hyper_util::rt::TokioIo;
-use std::cell::Cell;
 use std::convert::Infallible;
 use std::io::Write;
 use std::sync::Arc;
@@ -227,39 +226,13 @@ impl Http {
                             .unwrap()
                     },
                 }
-
-                // let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
-                // let mut resp = httparse::Response::new(&mut headers);
-                // if let Err(err) = resp.parse(&header_buf) {
-                //     error!(err = ?err, "failed to parse response header");
-                //     return Response::builder()
-                //         .status(500)
-                //         .body(BoxBody::new(Full::new(Bytes::from_static(b"failed to parse response header"))))
-                //         .unwrap();
-                // }
-                // if resp.code.is_none() {
-                //     error!("invalid response header: no status");
-                //     return Response::builder()
-                //         .status(500)
-                //         .body(BoxBody::new(Full::new(Bytes::from_static(b"invalid response header: no status"))))
-                //         .unwrap();
-                // }
-
-                // let mut http_builder = Response::builder().status(resp.code.unwrap())
-                //     .version(match resp.version {
-                //         Some(0) => http::Version::HTTP_10,
-                //         _ => http::Version::HTTP_11,
-                //     });
-                // for header in resp.headers {
-                //     http_builder = http_builder.header(header.name, header.value);
-                // }
             }
         }
     }
 }
 
 struct ResponseHeaderScanner {
-    buf_cell: Cell<Vec<u8>>,
+    buf: Vec<u8>,
     ended: bool,
     pos: usize,
 }
@@ -267,27 +240,26 @@ struct ResponseHeaderScanner {
 impl ResponseHeaderScanner {
     fn new(buf_size: usize) -> Self {
         Self {
-            buf_cell: Cell::new(Vec::with_capacity(buf_size)),
+            buf: Vec::with_capacity(buf_size),
             ended: false,
             pos: 0,
         }
     }
 
-    fn split_parts(&mut self) -> (&[u8], &[u8]) {
-        let buffer = self.buf_cell.get_mut();
-        buffer.split_at(self.pos)
+    fn split_parts(&self) -> (&[u8], &[u8]) {
+        // let buffer = self.buf_cell;
+        self.buf.split_at(self.pos)
     }
 
     /// Helper function to find the end of the header (\r\n\r\n) in the buffer.
     /// Returns true if the end of the header if it found.
     fn scan(&mut self, new_buf: Vec<u8>) -> bool {
-        let buffer = self.buf_cell.get_mut();
-        buffer.extend_from_slice(&new_buf);
-        for i in self.pos..buffer.len() - 3 {
-            if buffer[i] == b'\r'
-                && buffer[i + 1] == b'\n'
-                && buffer[i + 2] == b'\r'
-                && buffer[i + 3] == b'\n'
+        self.buf.extend_from_slice(&new_buf);
+        for i in self.pos..self.buf.len() - 3 {
+            if self.buf[i] == b'\r'
+                && self.buf[i + 1] == b'\n'
+                && self.buf[i + 2] == b'\r'
+                && self.buf[i + 3] == b'\n'
             {
                 self.pos = i + 4;
                 self.ended = true;
@@ -332,10 +304,10 @@ impl ResponseHeaderScanner {
         self.pos = self.pos.saturating_sub(n);
     }
 
-    fn reset(&mut self, buffer: Vec<u8>) {
+    fn reset(&mut self, buf: Vec<u8>) {
         self.ended = false;
         self.pos = 0;
-        self.buf_cell.set(buffer);
+        self.buf = buf;
     }
 }
 
@@ -346,9 +318,6 @@ async fn receive_response(
     client_cancel_receiver: CancellationToken,
     remove_bridge_sender: CancellationToken,
 ) {
-    // let mut header_cell = Cell::new(Vec::with_capacity(MAX_HEADER_SIZE));
-    // let mut header_ended = false;
-    // let mut scan_buf_start = 0;
     let mut header_scanner = ResponseHeaderScanner::new(MAX_HEADER_SIZE);
 
     loop {
