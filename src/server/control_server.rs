@@ -1,14 +1,14 @@
 use crate::event::ClientEventResponse;
 use crate::helper::validate_register_req;
-use crate::pb::{traffic_to_server, TrafficToServer};
+use crate::pb::control_command::Payload;
+use crate::pb::{traffic_to_server, ControlCommand, TrafficToServer};
 use crate::{bridge, constant, event};
 use crate::{
     io::CancellableReceiver,
     pb::{
-        control::Payload,
         tunnel::Config::{Http, Tcp, Udp},
         tunnel_service_server::{TunnelService, TunnelServiceServer},
-        Command, Control, InitPayload, RegisterReq, TrafficToClient, WorkPayload,
+        InitPayload, RegisterReq, TrafficToClient, WorkPayload,
     },
 };
 use anyhow::Context as _;
@@ -31,7 +31,7 @@ use super::Config;
 
 type GrpcResult<T> = Result<T, Status>;
 type GrpcResponse<T> = GrpcResult<Response<T>>;
-type RegisterStream = Pin<Box<CancellableReceiver<GrpcResult<Control>>>>;
+type RegisterStream = Pin<Box<CancellableReceiver<GrpcResult<ControlCommand>>>>;
 type DataStream = Pin<Box<dyn Stream<Item = GrpcResult<TrafficToClient>> + Send>>;
 
 /// Server is the control server of the tunnel daemon.
@@ -183,8 +183,7 @@ impl TunnelService for ControlHandler {
             // wait for the entrypoint assigned by the server
             let tenant_id = Uuid::new_v4();
             if let Ok(entrypoint) = entrypoint_rx.await {
-                let init_command = Control {
-                    command: Command::Init as i32,
+                let init_command = ControlCommand {
                     payload: Some(Payload::Init(InitPayload {
                         tunnel_id: tenant_id.to_string(),
                         assigned_entrypoint: entrypoint,
@@ -305,8 +304,7 @@ impl TunnelService for ControlHandler {
                                 info!(bridge_id = bridge_id, "new user connection");
                                 bridges.insert(bridge.id, bridge.inner);
                                 outbound_streaming_tx
-                                    .send(Ok(Control {
-                                        command: Command::Work as i32,
+                                    .send(Ok(ControlCommand {
                                         payload: Some(Payload::Work(WorkPayload { connection_id: bridge_id })),
                                     }))
                                     .await

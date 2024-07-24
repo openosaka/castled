@@ -16,8 +16,8 @@ use crate::{
     constant,
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
     pb::{
-        self, control::Payload, traffic_to_server, tunnel::Config,
-        tunnel_service_client::TunnelServiceClient, Command, Control, RegisterReq, TrafficToClient,
+        self, control_command::Payload, traffic_to_server, tunnel::Config,
+        tunnel_service_client::TunnelServiceClient, ControlCommand, RegisterReq, TrafficToClient,
         TrafficToServer,
     },
 };
@@ -124,7 +124,7 @@ impl Client {
     async fn wait_until_registered(
         &self,
         shutdown: ShutdownSignal<i8>,
-        control_stream: &mut Streaming<Control>,
+        control_stream: &mut Streaming<ControlCommand>,
     ) -> Result<Vec<String>> {
         select! {
             _ = shutdown => {
@@ -136,32 +136,22 @@ impl Client {
                 if result.is_err() {
                     return Err(result.unwrap_err().into());
                 }
-                let control = result.unwrap();
-                match Command::try_from(control.command) {
-                    Ok(Command::Init) => {
-                        match control.payload {
-                            Some(Payload::Init(init)) => {
-                                info!(
-                                    tunnel_id = init.tunnel_id,
-                                    entrypoint = ?init.assigned_entrypoint,
-                                    "tunnel registered successfully",
-                                );
-                                return Ok(init.assigned_entrypoint);
-                            }
-                            Some(Payload::Work(_)) => {
-                                error!("unexpected work command");
-                            }
-                            None => {
-                                error!("missing payload in init command");
-                            }
-                        }
-                    },
-                    Ok(cmd) => {
-                        error!(cmd = ?cmd, "unexpected command");
-                    },
-                    Err(err) => {
-                        error!(err = ?err, "unexpected command");
-                    },
+                let command = result.unwrap();
+                match command.payload {
+                    Some(Payload::Init(init)) => {
+                        info!(
+                            tunnel_id = init.tunnel_id,
+                            entrypoint = ?init.assigned_entrypoint,
+                            "tunnel registered successfully",
+                        );
+                        return Ok(init.assigned_entrypoint);
+                    }
+                    Some(Payload::Work(_)) => {
+                        error!("unexpected work command");
+                    }
+                    None => {
+                        error!("missing payload in init command");
+                    }
                 }
             }
         }
@@ -172,7 +162,7 @@ impl Client {
         &self,
         rpc_client: &mut TunnelServiceClient<Channel>,
         tunnel: pb::Tunnel,
-    ) -> Result<Response<Streaming<Control>>> {
+    ) -> Result<Response<Streaming<ControlCommand>>> {
         let span = span!(
             tracing::Level::INFO,
             "register_tunnel",
@@ -225,7 +215,7 @@ impl Client {
         &self,
         shutdown: ShutdownSignal<i8>,
         rpc_client: TunnelServiceClient<Channel>,
-        register_resp: tonic::Response<Streaming<Control>>,
+        register_resp: tonic::Response<Streaming<ControlCommand>>,
         local_endpoint: SocketAddr,
         is_udp: bool,
         mut hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
@@ -252,7 +242,7 @@ impl Client {
     async fn start_streaming(
         &self,
         shutdown: ShutdownSignal<i8>,
-        control_stream: &mut Streaming<Control>,
+        control_stream: &mut Streaming<ControlCommand>,
         rpc_client: TunnelServiceClient<Channel>,
         local_endpoint: SocketAddr,
         is_udp: bool,
@@ -268,40 +258,27 @@ impl Client {
                     if result.is_err() {
                         return Err(result.unwrap_err().into());
                     }
-                    let control = result.unwrap();
-                    match Command::try_from(control.command) {
-                        Ok(Command::Init) => {
-                            error!("tunnel has been initialized, should not receive init command again");
-                            return Err(anyhow::anyhow!("tunnel has been initialized"));
-                        },
-                        Ok(Command::Work) => {
-                            match control.payload {
-                                Some(Payload::Init(_)) => {
-                                    error!("unexpected init command");
-                                }
-                                Some(Payload::Work(work)) => {
-                                    debug!("received work command, starting to forward traffic");
-                                    if let Err(err) = handle_work_traffic(
-                                        rpc_client.clone() /* cheap clone operation */,
-                                        &work.connection_id,
-                                        local_endpoint,
-                                        is_udp,
-                                    ).await {
-                                        error!(err = ?err, "failed to handle work traffic");
-                                    } else {
-                                        continue; // the only path to success.
-                                    }
-                                }
-                                None => {
-                                    error!("missing payload in work command");
-                                    return Err(anyhow::anyhow!("missing payload in work command"));
-                                }
+                    let command = result.unwrap();
+                    match command.payload {
+                        Some(Payload::Init(_)) => {
+                            error!("unexpected init command");
+                        }
+                        Some(Payload::Work(work)) => {
+                            debug!("received work command, starting to forward traffic");
+                            if let Err(err) = handle_work_traffic(
+                                rpc_client.clone() /* cheap clone operation */,
+                                &work.connection_id,
+                                local_endpoint,
+                                is_udp,
+                            ).await {
+                                error!(err = ?err, "failed to handle work traffic");
+                            } else {
+                                continue; // the only path to success.
                             }
-                            break;
-                        },
-                        _ => {
-                            error!(command = %control.command, "unexpected command");
-                            return Err(anyhow::anyhow!("unexpected command"));
+                        }
+                        None => {
+                            error!("missing payload in work command");
+                            return Err(anyhow::anyhow!("missing payload in work command"));
                         }
                     }
                 }

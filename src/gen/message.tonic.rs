@@ -88,7 +88,7 @@ pub mod tunnel_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::RegisterReq>,
         ) -> std::result::Result<
-            tonic::Response<tonic::codec::Streaming<super::Control>>,
+            tonic::Response<tonic::codec::Streaming<super::ControlCommand>>,
             tonic::Status,
         > {
             self.inner
@@ -145,7 +145,7 @@ pub mod tunnel_service_server {
     pub trait TunnelService: Send + Sync + 'static {
         /// Server streaming response type for the Register method.
         type RegisterStream: tonic::codegen::tokio_stream::Stream<
-                Item = std::result::Result<super::Control, tonic::Status>,
+                Item = std::result::Result<super::ControlCommand, tonic::Status>,
             >
             + Send
             + 'static;
@@ -250,7 +250,7 @@ pub mod tunnel_service_server {
                         T: TunnelService,
                     > tonic::server::ServerStreamingService<super::RegisterReq>
                     for RegisterSvc<T> {
-                        type Response = super::Control;
+                        type Response = super::ControlCommand;
                         type ResponseStream = T::RegisterStream;
                         type Future = BoxFuture<
                             tonic::Response<Self::ResponseStream>,

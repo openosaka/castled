@@ -60,7 +60,7 @@ func (c *tunnelServiceClient) Register(ctx context.Context, in *RegisterReq, opt
 }
 
 type TunnelService_RegisterClient interface {
-	Recv() (*Control, error)
+	Recv() (*ControlCommand, error)
 	grpc.ClientStream
 }
 
@@ -68,8 +68,8 @@ type tunnelServiceRegisterClient struct {
 	grpc.ClientStream
 }
 
-func (x *tunnelServiceRegisterClient) Recv() (*Control, error) {
-	m := new(Control)
+func (x *tunnelServiceRegisterClient) Recv() (*ControlCommand, error) {
+	m := new(ControlCommand)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func _TunnelService_Register_Handler(srv interface{}, stream grpc.ServerStream) 
 }
 
 type TunnelService_RegisterServer interface {
-	Send(*Control) error
+	Send(*ControlCommand) error
 	grpc.ServerStream
 }
 
@@ -161,7 +161,7 @@ type tunnelServiceRegisterServer struct {
 	grpc.ServerStream
 }
 
-func (x *tunnelServiceRegisterServer) Send(m *Control) error {
+func (x *tunnelServiceRegisterServer) Send(m *ControlCommand) error {
 	return x.ServerStream.SendMsg(m)
 }
 

@@ -7,28 +7,19 @@ option go_package = "github.com/castled-dev/castled/sdk/go/proto";
 service TunnelService {
   // the client sends Register to the server to create a tunnel.
   // the server returns a stream Control to the client, the following control messages are sent through the stream.
-  rpc Register(RegisterReq) returns (stream Control) {}
+  rpc Register(RegisterReq) returns (stream ControlCommand) {}
 
   // server side: write traffic to the stream, and read traffic from the stream.
   // client side: read traffic from the stream, and write traffic to the stream.
   rpc Data(stream TrafficToServer) returns (stream TrafficToClient) {}
 }
 
-enum Command {
-  // Init command is sent only once as the first control message to the client.
-  Init = 0;
-  // Work command is sent when a user connection is established,
-  // then the client needs to start a Data stream to receive and send data.
-  Work = 1;
-}
-
-// Control is a stream used to control the tunnel.
-message Control {
-  Command command = 1;
-
+// ControlCommand is the command sent by the server to the client  
+// which is used to notify the client to do something.
+message ControlCommand {
   oneof payload {
-    InitPayload init = 2;
-    WorkPayload work = 3;
+    InitPayload init = 1;
+    WorkPayload work = 2;
   }
 }
 
@@ -88,18 +79,10 @@ message Tunnel {
   // name is the name of the tunnel.
   string name = 2;
 
-  enum Type {
-    TCP = 0;
-    HTTP = 10;
-    UDP = 20;
-  }
-
-  Type type = 3;
-
   oneof config {
-    TCPConfig tcp = 4;
-    HTTPConfig http = 5;
-    UDPConfig udp = 6;
+    TCPConfig tcp = 3;
+    HTTPConfig http = 4;
+    UDPConfig udp = 5;
   }
 }
 
