@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/openosaka/castled/sdk/go/proto"
@@ -65,6 +66,20 @@ func (c *Client) newGrpcClient() (proto.TunnelServiceClient, error) {
 	return proto.NewTunnelServiceClient(conn), nil
 }
 
-func (c *Client) StartTunnel() error {
+func (c *Client) StartTunnel(ctx context.Context, tunnel Tunnel) error {
+	stream, err := c.grpcClient.Register(ctx, &proto.RegisterReq{
+		Tunnel: &tunnel.Tunnel,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to register tunnel: %w", err)
+	}
+
+	for {
+		_, err := stream.Recv()
+		if err != nil {
+			return fmt.Errorf("failed to receive control message: %w")
+		}
+	}
+
 	return nil
 }
