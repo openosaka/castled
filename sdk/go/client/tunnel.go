@@ -35,7 +35,6 @@ func NewTCPTunnel(name, localAddr string, options ...tcpOption) *Tunnel {
 	return &Tunnel{
 		Tunnel: proto.Tunnel{
 			Name: name,
-			Type: proto.Tunnel_UDP,
 			Config: &proto.Tunnel_Udp{
 				Udp: &proto.UDPConfig{
 					RemotePort: int32(opts.port),
@@ -70,7 +69,6 @@ func NewUDPTunnel(name, localAddr string, options ...udpOption) *Tunnel {
 	return &Tunnel{
 		Tunnel: proto.Tunnel{
 			Name: name,
-			Type: proto.Tunnel_UDP,
 			Config: &proto.Tunnel_Udp{
 				Udp: &proto.UDPConfig{
 					RemotePort: int32(opts.port),
@@ -82,33 +80,46 @@ func NewUDPTunnel(name, localAddr string, options ...udpOption) *Tunnel {
 }
 
 type httpOptions struct {
-	domain          string
-	subDomain       string
-	randomSubdomain bool
-	port            int16
+	pbFn func() *proto.HTTPConfig
 }
 
 func WithHTTPPort(port int16) httpOption {
 	return func(opts *httpOptions) {
-		opts.port = port
+		opts.pbFn = func() *proto.HTTPConfig {
+			return &proto.HTTPConfig{
+				RemotePort: int32(port),
+			}
+		}
 	}
 }
 
 func WithHTTPDomain(domain string) httpOption {
 	return func(opts *httpOptions) {
-		opts.domain = domain
+		opts.pbFn = func() *proto.HTTPConfig {
+			return &proto.HTTPConfig{
+				Domain: domain,
+			}
+		}
 	}
 }
 
 func WithHTTPSubDomain(subDomain string) httpOption {
 	return func(opts *httpOptions) {
-		opts.subDomain = subDomain
+		opts.pbFn = func() *proto.HTTPConfig {
+			return &proto.HTTPConfig{
+				Subdomain: subDomain,
+			}
+		}
 	}
 }
 
 func WithHTTPRandomSubdomain(randomSubdomain bool) httpOption {
 	return func(opts *httpOptions) {
-		opts.randomSubdomain = randomSubdomain
+		opts.pbFn = func() *proto.HTTPConfig {
+			return &proto.HTTPConfig{
+				RandomSubdomain: randomSubdomain,
+			}
+		}
 	}
 }
 
@@ -118,6 +129,10 @@ type httpOption func(*httpOptions)
 //
 // Without any option, the default behavior is to create a tunnel with a random port.
 func NewHTTPTunnel(name, localAddr string, options ...httpOption) *Tunnel {
+	if len(options) > 1 {
+		panic("only one option is allowed")
+	}
+
 	opts := &httpOptions{}
 	for _, option := range options {
 		option(opts)
@@ -126,11 +141,8 @@ func NewHTTPTunnel(name, localAddr string, options ...httpOption) *Tunnel {
 	return &Tunnel{
 		Tunnel: proto.Tunnel{
 			Name: name,
-			Type: proto.Tunnel_UDP,
-			Config: &proto.Tunnel_Udp{
-				Udp: &proto.UDPConfig{
-					RemotePort: int32(opts.port),
-				},
+			Config: &proto.Tunnel_Http{
+				Http: opts.pbFn(),
 			},
 		},
 		LocalAddr: localAddr,
