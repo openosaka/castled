@@ -56,7 +56,7 @@ impl Udp {
                                     .await
                                     .unwrap();
 
-                                Self::transfer(&buf[..n], client_cancel_receiver, data_sender, data_receiver, &*remote_writer, addr).await;
+                                Self::transfer(&buf[..n], client_cancel_receiver, data_sender, data_receiver, &remote_writer, addr).await;
                                 remove_bridge_sender.cancel();
                             },
                             Err(err) => {
