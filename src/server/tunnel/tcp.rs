@@ -82,14 +82,13 @@ impl Tcp {
                         };
 
                         tokio::select! {
-                            _ = async { tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remote) } => {
-                                remove_bridge_sender.cancel();
-                            }
+                            _ = async { tokio::join!(remote_to_me_to_tunnel, tunnel_to_me_to_remote) } => {}
                             _ = client_cancel_receiver.cancelled() => {
                                 let _ = remote_writer.shutdown().await;
                                 let _ = tunnel_writer.shutdown().await;
                             }
                         }
+                        remove_bridge_sender.cancel();
                     });
                 }
             }

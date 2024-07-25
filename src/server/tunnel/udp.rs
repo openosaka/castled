@@ -49,51 +49,14 @@ impl Udp {
                                 let (n, addr) = data;
                                 let BridgeResult {
                                     data_sender,
-                                    mut data_receiver,
+                                    data_receiver,
                                     client_cancel_receiver,
                                     remove_bridge_sender,
                                 } = super::init_data_sender_bridge(user_incoming_sender.clone())
                                     .await
                                     .unwrap();
 
-                                select!{
-                                    _ = client_cancel_receiver.cancelled() => {}
-                                    result = data_sender.send(buf[..n].to_vec()) => {
-                                        if let Err(err) = result {
-                                            remove_bridge_sender.cancel();
-                                            error!(err = ?err, "failed to send udp to client");
-                                            return;
-                                        }
-                                    }
-                                }
-
-
-                                let mut data = vec![];
-                                select !{
-                                    _ = client_cancel_receiver.cancelled() => {}
-                                    result = data_receiver.recv() => {
-                                        if result.is_none() {
-                                            remove_bridge_sender.cancel();
-                                            warn!("received a empty data from data_receiver, shouldn't happen");
-                                            return;
-                                        }
-                                        data = match result.unwrap() {
-                                            BridgeData::Data(data) => data,
-                                            BridgeData::Sender(_) => {
-                                                panic!("data_receiver should not be closed");
-                                            },
-                                        };
-                                    }
-                                }
-
-                                select!{
-                                    _ = client_cancel_receiver.cancelled() => {}
-                                    result = remote_writer.send_to(data.as_slice(), addr) => {
-                                        if let Err(err) = result {
-                                            error!(err = ?err, "failed to send udp response");
-                                        }
-                                    }
-                                }
+                                Self::transfer(&buf[..n], client_cancel_receiver, data_sender, data_receiver, &*remote_writer, addr).await;
                                 remove_bridge_sender.cancel();
                             },
                             Err(err) => {
@@ -101,6 +64,51 @@ impl Udp {
                             },
                         }
                     });
+                }
+            }
+        }
+    }
+
+    async fn transfer(
+        buf: &[u8],
+        client_cancel_receiver: CancellationToken,
+        data_sender: mpsc::Sender<Vec<u8>>,
+        mut data_receiver: mpsc::Receiver<BridgeData>,
+        remote_writer: &UdpSocket,
+        remote_addr: std::net::SocketAddr,
+    ) {
+        select! {
+            _ = client_cancel_receiver.cancelled() => {}
+            result = data_sender.send(buf.to_vec()) => {
+                if let Err(err) = result {
+                    error!(err = ?err, "failed to send udp to client");
+                    return;
+                }
+            }
+        }
+
+        let mut data = vec![];
+        select! {
+            _ = client_cancel_receiver.cancelled() => {}
+            result = data_receiver.recv() => {
+                if result.is_none() {
+                    warn!("received a empty data from data_receiver, shouldn't happen");
+                    return;
+                }
+                data = match result.unwrap() {
+                    BridgeData::Data(data) => data,
+                    BridgeData::Sender(_) => {
+                        panic!("data_receiver should not be closed");
+                    },
+                };
+            }
+        }
+
+        select! {
+            _ = client_cancel_receiver.cancelled() => {}
+            result = remote_writer.send_to(data.as_slice(), remote_addr) => {
+                if let Err(err) = result {
+                    error!(err = ?err, "failed to send udp response");
                 }
             }
         }
