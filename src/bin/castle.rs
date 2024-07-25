@@ -33,7 +33,7 @@ enum Commands {
             default_value = "127.0.0.1",
             help = "Local address to bind to, e.g localhost, 127.0.0.1"
         )]
-        local_addr: String,
+        local_host: String,
     },
     Http {
         #[clap(index = 1)]
@@ -49,7 +49,7 @@ enum Commands {
             default_value = "127.0.0.1",
             help = "Local address to bind to, e.g localhost, 127.0.0.1"
         )]
-        local_addr: String,
+        local_host: String,
         #[arg(long)]
         random_subdomain: bool,
     },
@@ -63,7 +63,7 @@ enum Commands {
             default_value = "127.0.0.1",
             help = "Local address to bind to, e.g localhost, 127.0.0.1"
         )]
-        local_addr: String,
+        local_host: String,
     },
 }
 
@@ -88,9 +88,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Tcp {
             port,
             remote_port,
-            local_addr,
+            local_host,
         } => {
-            let local_endpoint = parse_socket_addr(&local_addr, port).await?;
+            let local_endpoint = parse_socket_addr(&local_host, port).await?;
             tunnel = Tunnel::new(
                 DEFAULT_TCP_TUNNEL_NAME,
                 local_endpoint,
@@ -100,9 +100,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Udp {
             port,
             remote_port,
-            local_addr,
+            local_host,
         } => {
-            let local_endpoint = parse_socket_addr(&local_addr, port).await?;
+            let local_endpoint = parse_socket_addr(&local_host, port).await?;
             tunnel = Tunnel::new(
                 DEFAULT_UDP_TUNNEL_NAME,
                 local_endpoint,
@@ -111,13 +111,13 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Http {
             port,
-            local_addr,
+            local_host,
             domain,
             subdomain,
             random_subdomain,
             remote_port,
         } => {
-            let local_endpoint = parse_socket_addr(&local_addr, port).await?;
+            let local_endpoint = parse_socket_addr(&local_host, port).await?;
             tunnel = Tunnel::new(
                 DEFAULT_HTTP_TUNNEL_NAME,
                 local_endpoint,
@@ -157,8 +157,8 @@ fn to_str<'a>(s: String) -> &'a str {
     Box::leak(s.into_boxed_str())
 }
 
-async fn parse_socket_addr(local_addr: &str, port: u16) -> anyhow::Result<SocketAddr> {
-    let addr = format!("{}:{}", local_addr, port);
+async fn parse_socket_addr(local_host: &str, port: u16) -> anyhow::Result<SocketAddr> {
+    let addr = format!("{}:{}", local_host, port);
     let mut addrs = addr.to_socket_addrs()?;
     if addrs.len() == 1 {
         return Ok(addrs.next().unwrap());

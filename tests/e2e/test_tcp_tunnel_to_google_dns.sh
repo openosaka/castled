@@ -17,7 +17,7 @@ exec $root_dir/target/debug/castled &
 server_pid=$!
 wait_port 6610
 
-run_client tcp 53 --remote-port 10053 --local-addr 8.8.8.8 
+run_client tcp 53 --remote-port 10053 --local-host 8.8.8.8 
 client_pid=$!
 wait_port 10053
 
