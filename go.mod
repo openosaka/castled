@@ -3,6 +3,7 @@ module github.com/openosaka/castled
 go 1.22.4
 
 require (
+	github.com/davecgh/go-spew v1.1.1
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/pflag v1.0.5
 	google.golang.org/grpc v1.65.0

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,6 +10,9 @@ import (
 
 	"github.com/openosaka/castled/sdk/go/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const DEFAULT_BUFFER_SIZE = 8 * 1024
@@ -20,32 +24,16 @@ type Client struct {
 }
 
 type options struct {
-	controlServerPort uint16
-	controlServerHost string
-	logger            Logger
+	logger Logger
 }
 
 func newOptions() *options {
 	return &options{
-		controlServerPort: 6610,
-		controlServerHost: "localhost",
-		logger:            slog.Default(),
+		logger: slog.Default(),
 	}
 }
 
 type Option func(*options)
-
-func WithControlServerHost(host string) func(*options) {
-	return func(o *options) {
-		o.controlServerHost = host
-	}
-}
-
-func WithControlServerPort(port uint16) func(*options) {
-	return func(o *options) {
-		o.controlServerPort = port
-	}
-}
 
 func WithLogger(logger Logger) func(*options) {
 	return func(c *options) {
@@ -53,7 +41,7 @@ func WithLogger(logger Logger) func(*options) {
 	}
 }
 
-func NewClient(options ...Option) (*Client, error) {
+func NewClient(serverAddr string, options ...Option) (*Client, error) {
 	opts := newOptions()
 	for _, o := range options {
 		o(opts)
@@ -61,7 +49,7 @@ func NewClient(options ...Option) (*Client, error) {
 
 	client := &Client{
 		logger:            opts.logger,
-		controlServerAddr: fmt.Sprintf("%s:%d", opts.controlServerHost, opts.controlServerPort),
+		controlServerAddr: serverAddr,
 	}
 	grpcClient, err := client.newGrpcClient()
 	if err != nil {
@@ -73,32 +61,41 @@ func NewClient(options ...Option) (*Client, error) {
 }
 
 func (c *Client) newGrpcClient() (proto.TunnelServiceClient, error) {
-	conn, err := grpc.NewClient(c.controlServerAddr)
+	conn, err := grpc.NewClient(c.controlServerAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
 	return proto.NewTunnelServiceClient(conn), nil
 }
 
-func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, error) {
+func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, <-chan error, error) {
+	quit := make(chan error, 1)
+
 	stream, err := c.grpcClient.Register(ctx, &proto.RegisterReq{
 		Tunnel: &tunnel.Tunnel,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to register tunnel: %w", err)
+		return nil, nil, fmt.Errorf("failed to register tunnel: %w", err)
 	}
 
 	command, err := stream.Recv()
 	if err != nil {
-		return nil, fmt.Errorf("failed to receive control message: %w", err)
+		return nil, nil, fmt.Errorf("failed to init the registration: %w", err)
 	}
 
 	payload, ok := command.Payload.(*proto.ControlCommand_Init)
 	if !ok {
-		return nil, fmt.Errorf("first command should be init")
+		return nil, nil, fmt.Errorf("first command should be init")
 	}
 
 	go func() {
+		defer c.logger.Debug("tunnel closed")
+
+		var err error
+		defer func() {
+			quit <- err
+		}()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -107,27 +104,33 @@ func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, err
 			default:
 			}
 
-			command, err := stream.Recv()
+			var command *proto.ControlCommand
+			command, err = stream.Recv()
+			if gerr, ok := status.FromError(err); ok && gerr.Code() == codes.Unavailable {
+				err = fmt.Errorf("control server is unavailable: %w", err)
+				return
+			}
 			if err != nil {
-				c.logger.Error("failed to receive control message", slog.Any("error", err))
+				err = fmt.Errorf("failed to receive control message: %w", err)
 				return
 			}
 			c.logger.Debug("received control message", slog.Any("command", command))
 
 			_, ok := command.Payload.(*proto.ControlCommand_Init)
 			if ok {
-				c.logger.Error("unexpected init command")
+				err = errors.New("unexpected init command")
 				return
 			}
 
 			work, ok := command.Payload.(*proto.ControlCommand_Work)
 			if !ok {
-				c.logger.Error("unexpected command, expected work command")
+				err = errors.New("unexpected command, expected work command")
 				return
 			}
 
 			//TODO(sword): traffic control
 			go func() {
+				// TODO(sword): refactor using the tunnel to handle protocol specific
 				if err := c.work(ctx, tunnel.LocalAddr, work); err != nil {
 					c.logger.Error("failed to process work command", slog.Any("error", err))
 				}
@@ -135,10 +138,12 @@ func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, err
 		}
 	}()
 
-	return payload.Init.AssignedEntrypoint, nil
+	return payload.Init.AssignedEntrypoint, quit, nil
 }
 
 func (c *Client) work(ctx context.Context, localAddr string, work *proto.ControlCommand_Work) error {
+	connectionID := work.Work.ConnectionId
+
 	bidiStream, err := c.grpcClient.Data(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create data stream: %w", err)
@@ -147,7 +152,8 @@ func (c *Client) work(ctx context.Context, localAddr string, work *proto.Control
 	localConn, err := net.Dial("tcp", localAddr)
 	if err != nil {
 		err2 := bidiStream.Send(&proto.TrafficToServer{
-			Action: proto.TrafficToServer_Close,
+			ConnectionId: connectionID,
+			Action:       proto.TrafficToServer_Close,
 		})
 		if err2 != nil {
 			c.logger.Error("failed to send close action to control server, the server maybe crashed", slog.Any("error", err2))
@@ -157,7 +163,8 @@ func (c *Client) work(ctx context.Context, localAddr string, work *proto.Control
 	}
 
 	if err := bidiStream.Send(&proto.TrafficToServer{
-		Action: proto.TrafficToServer_Start,
+		ConnectionId: connectionID,
+		Action:       proto.TrafficToServer_Start,
 	}); err != nil {
 		return fmt.Errorf("failed to send start action: %w", err)
 	}
@@ -176,6 +183,10 @@ func (c *Client) work(ctx context.Context, localAddr string, work *proto.Control
 			}
 
 			dataToClient, err := bidiStream.Recv()
+			if err == io.EOF {
+				c.logger.Debug("server closed the stream, most of times are because the server finished the work")
+				return
+			}
 			if err != nil {
 				c.logger.Error("failed to receive data", slog.Any("error", err))
 				return
@@ -216,7 +227,7 @@ func (c *Client) work(ctx context.Context, localAddr string, work *proto.Control
 			c.logger.Debug("read data from local connection", slog.Int("n", n))
 
 			if err := bidiStream.Send(&proto.TrafficToServer{
-				ConnectionId: work.Work.ConnectionId,
+				ConnectionId: connectionID,
 				Action:       proto.TrafficToServer_Sending,
 				Data:         buf[:n],
 			}); err != nil {
@@ -226,7 +237,8 @@ func (c *Client) work(ctx context.Context, localAddr string, work *proto.Control
 		}
 
 		if err := bidiStream.Send(&proto.TrafficToServer{
-			Action: proto.TrafficToServer_Finished,
+			ConnectionId: connectionID,
+			Action:       proto.TrafficToServer_Finished,
 		}); err != nil {
 			c.logger.Error("failed to send close action to control server", slog.Any("error", err))
 		}

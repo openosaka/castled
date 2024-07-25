@@ -5,6 +5,18 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
+			"name": "Debug go http tunnel",
+			"type": "go",
+			"request": "launch",
+			"mode": "auto",
+			"program": "${workspaceFolder}/tests/e2e/castle_go/main.go",
+			"args": [
+				"http",
+				"9991"
+			]
+		},
+
+		{
 			"type": "lldb",
 			"request": "launch",
 			"name": "Debug unit tests in library 'tests'",
