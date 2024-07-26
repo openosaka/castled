@@ -173,6 +173,9 @@ func (c *Client) work(ctx context.Context, localAddr string, work *proto.Control
 		// read from the stream
 		defer func() {
 			c.logger.Debug("quit reading")
+			if tcpConn, ok := localConn.(*net.TCPConn); ok {
+				tcpConn.CloseWrite()
+			}
 		}()
 
 		for {
@@ -183,7 +186,7 @@ func (c *Client) work(ctx context.Context, localAddr string, work *proto.Control
 			}
 
 			dataToClient, err := bidiStream.Recv()
-			if err == io.EOF {
+			if err == io.EOF || len(dataToClient.Data) == 0 {
 				c.logger.Debug("server closed the stream, most of times are because the server finished the work")
 				return
 			}
