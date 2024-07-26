@@ -72,7 +72,7 @@ impl DataServer {
                                 Tcp::new(listener, conn_event_chan.clone())
                                     .serve(cancel)
                                     .await;
-                                info!("tcp closed on {}", port);
+                                info!(port, "tcp server closed");
                             });
                             event
                                 .resp
@@ -102,7 +102,7 @@ impl DataServer {
                                 Udp::new(socket, conn_event_chan.clone())
                                     .serve(cancel)
                                     .await;
-                                info!("udp socket on {} closed", port);
+                                info!(port, "udp server closed");
                             });
                             event
                                 .resp

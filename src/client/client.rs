@@ -401,19 +401,39 @@ async fn handle_work_traffic(
                     .unwrap();
                 return;
             }
+
             let socket = socket.unwrap();
             let result = socket.connect(local_endpoint).await;
             if let Err(err) = result {
                 error!(err = ?err, "failed to connect to local endpoint, so let's notify the server to close the user connection");
             }
+
             local_conn_established_tx.send(()).await.unwrap();
 
-            let buf = transfer_rx.recv().await.unwrap();
-            socket.send(&buf.data).await.unwrap();
-            let mut buf = vec![0u8; 65507];
-            let n = socket.recv(&mut buf).await;
-            writer.write_all(&buf[..n.unwrap()]).await.unwrap();
-            writer.shutdown().await.unwrap();
+            let read_transfer_send_to_local = async {
+                while let Some(buf) = transfer_rx.recv().await {
+                    socket.send(&buf.data).await.unwrap();
+                }
+            };
+
+            let read_local_send_to_server = async {
+                loop {
+                    let mut buf = vec![0u8; 65507];
+                    let result = socket.recv(&mut buf).await;
+                    match result {
+                        Ok(n) => {
+                            writer.write_all(&buf[..n]).await.unwrap();
+                        }
+                        Err(err) => {
+                            error!(err = ?err, "failed to read from local endpoint");
+                            break;
+                        }
+                    }
+                }
+                writer.shutdown().await.unwrap();
+            };
+
+            tokio::join!(read_transfer_send_to_local, read_local_send_to_server);
         });
     } else {
         tokio::spawn(async move {
