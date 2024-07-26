@@ -19,7 +19,7 @@ wait_port 6610
 
 run_client udp 53 --remote-port 10053 --local-host 8.8.8.8
 client_pid=$!
-wait_port_on_udp 10053
+wait_port 10053
 
 output=$(dig @127.0.0.1 -p 10053 +noedns google.com)
 if echo "$output" | grep -q "ANSWER SECTION"; then

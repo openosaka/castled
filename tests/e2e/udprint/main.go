@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"os"
 
@@ -30,7 +29,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer conn.Close()
-	log.Printf("UDP server listening on port %d", port)
 
 	buffer := make([]byte, 1024)
 
@@ -42,6 +40,6 @@ func main() {
 		}
 
 		message := string(buffer[:n])
-		log.Printf("Received message from %s: %s", clientAddr, message)
+		fmt.Printf("Received message from %s: %s", clientAddr, message)
 	}
 }
