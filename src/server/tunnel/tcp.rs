@@ -53,26 +53,25 @@ impl Tcp {
                     if result.is_none() {
                         return;
                     }
-
                     let user_incoming_sender = self.user_incoming_sender.clone();
 
-                    let BridgeResult{
-                        data_sender,
-                        data_receiver,
-                        client_cancel_receiver,
-                        remove_bridge_sender
-                    } = match super::init_data_sender_bridge(user_incoming_sender.clone()).await {
-                        Ok(result) => result,
-                        Err(err) => {
-                            error!(err = ?err, "failed to init data sender bridge");
-                            // we should continue to accept next connection,
-                            // return here will cause the tcp listener to shutdown
-                            continue;
-                        }
-                    };
-
-                    let (stream, _addr) = result.unwrap();
                     tokio::spawn(async move {
+                        let BridgeResult{
+                            data_sender,
+                            data_receiver,
+                            client_cancel_receiver,
+                            remove_bridge_sender
+                        } = match super::init_data_sender_bridge(user_incoming_sender.clone()).await {
+                            Ok(result) => result,
+                            Err(err) => {
+                                error!(err = ?err, "failed to init data sender bridge");
+                                // we should continue to accept next connection,
+                                // return here will cause the tcp listener to shutdown
+                                return;
+                            }
+                        };
+
+                        let (stream, _addr) = result.unwrap();
                         let (mut remote_reader, mut remote_writer) = stream.into_split();
                         let wrapper = VecWrapper::<Vec<u8>>::new();
                         // we expect to receive data from data_channel_rx after receive the first data_sender
