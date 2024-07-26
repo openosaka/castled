@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/openosaka/castled/sdk/go/client"
+	"github.com/openosaka/castled/sdk/go/castle"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -33,19 +33,19 @@ var httpCmd = &cobra.Command{
 			return err
 		}
 
-		var options []client.HTTPOption
+		var options []castle.HTTPOption
 		if domain, _ := cmd.Flags().GetString("domain"); domain != "" {
 			println(domain)
-			options = append(options, client.WithHTTPDomain(domain))
+			options = append(options, castle.WithHTTPDomain(domain))
 		} else if subdomain, _ := cmd.Flags().GetString("subdomain"); subdomain != "" {
-			options = append(options, client.WithHTTPSubDomain(subdomain))
+			options = append(options, castle.WithHTTPSubDomain(subdomain))
 		} else if randomSubdomain, _ := cmd.Flags().GetBool("random-subdomain"); randomSubdomain {
-			options = append(options, client.WithHTTPRandomSubdomain())
+			options = append(options, castle.WithHTTPRandomSubdomain())
 		} else if remotePort, _ := cmd.Flags().GetUint16("remote-port"); remotePort != 0 {
-			options = append(options, client.WithHTTPPort(remotePort))
+			options = append(options, castle.WithHTTPPort(remotePort))
 		}
 
-		tunnel := client.NewHTTPTunnel("go-http", getLocalAddr(cmd.Flags(), localPort), options...)
+		tunnel := castle.NewHTTPTunnel("go-http", getLocalAddr(cmd.Flags(), localPort), options...)
 		return run(cmd.Context(), serverAddr, tunnel)
 	},
 }
@@ -64,12 +64,12 @@ var tcpCmd = &cobra.Command{
 			return err
 		}
 
-		var options []client.TCPOption
+		var options []castle.TCPOption
 		if remotePort, _ := cmd.Flags().GetUint16("remote-port"); remotePort != 0 {
-			options = append(options, client.WithTCPPort(remotePort))
+			options = append(options, castle.WithTCPPort(remotePort))
 		}
 
-		tunnel := client.NewTCPTunnel("go-tcp", getLocalAddr(cmd.Flags(), localPort), options...)
+		tunnel := castle.NewTCPTunnel("go-tcp", getLocalAddr(cmd.Flags(), localPort), options...)
 		return run(cmd.Context(), serverAddr, tunnel)
 	},
 }
@@ -87,12 +87,12 @@ var udpCmd = &cobra.Command{
 			return err
 		}
 
-		var options []client.UDPOption
+		var options []castle.UDPOption
 		if remotePort, _ := cmd.Flags().GetUint16("remote-port"); remotePort != 0 {
-			options = append(options, client.WithUdpPort(remotePort))
+			options = append(options, castle.WithUdpPort(remotePort))
 		}
 
-		tunnel := client.NewUDPTunnel("go-udp", getLocalAddr(cmd.Flags(), localPort), options...)
+		tunnel := castle.NewUDPTunnel("go-udp", getLocalAddr(cmd.Flags(), localPort), options...)
 		return run(cmd.Context(), serverAddr, tunnel)
 	},
 }
@@ -102,8 +102,8 @@ func getLocalAddr(fs *pflag.FlagSet, port int) string {
 	return fmt.Sprintf("%s:%d", localHost, port)
 }
 
-func run(ctx context.Context, serverAddr string, tunnel *client.Tunnel) error {
-	client, err := client.NewClient(serverAddr)
+func run(ctx context.Context, serverAddr string, tunnel *castle.Tunnel) error {
+	client, err := castle.NewClient(serverAddr)
 	if err != nil {
 		return err
 	}
