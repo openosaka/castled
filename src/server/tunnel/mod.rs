@@ -43,18 +43,8 @@ pub(crate) async fn init_data_sender_bridge(
     user_incoming_chan
         .send(event::UserIncoming::Add(event))
         .await
+        .context("send user incoming event, this operation should not fail")
         .unwrap();
-    let data_sender = bridge_chan_receiver
-        .recv()
-        .await
-        .context("failed to receive data_sender")
-        .unwrap();
-    let data_sender = {
-        match data_sender {
-            bridge::BridgeData::Sender(sender) => sender,
-            _ => panic!("we expect to receive DataSender from data_channel_rx at the first time."),
-        }
-    };
 
     let remove_bridge_sender = CancellationToken::new();
     let remove_bridge_receiver = remove_bridge_sender.clone();
@@ -67,6 +57,19 @@ pub(crate) async fn init_data_sender_bridge(
             .context("notify server to remove connection channel")
             .unwrap();
     });
+
+    let data_sender = tokio::select! {
+        data_sender = bridge_chan_receiver.recv() => {
+            match data_sender {
+                Some(bridge::BridgeData::Sender(sender)) => sender,
+                _ => panic!("we expect to receive DataSender from data_channel_rx at the first time."),
+            }
+        }
+        _ = client_cancel_receiver.cancelled() => {
+            remove_bridge_sender.cancel();
+            return Err(anyhow::anyhow!("client cancelled"))
+        }
+    };
 
     Ok(BridgeResult {
         data_sender,

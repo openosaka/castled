@@ -317,7 +317,11 @@ impl TunnelService for ControlHandler {
                                     info!(bridge_id = bridge_id, "remove user connection");
                                 }
                                 bridges.remove(&bridge_id);
-                                close_sender_notifiers.remove(&bridge_id).unwrap().1.cancel();
+                                if let Some(notifier) = close_sender_notifiers.remove(&bridge_id) {
+                                    // the close_sender register in Start action,
+                                    // so it might be None.
+                                    notifier.1.cancel();
+                                };
                             }
                         }
                     }
