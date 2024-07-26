@@ -76,6 +76,7 @@ e2e-tcp:
 .PHONY: e2e-udp
 e2e-udp:
 	./tests/e2e/test_udp_tunnel_to_google_dns.sh
+	./tests/e2e/test_udp_reuse_data_streaming.sh
 
 NEW_CRATE_VERSION="0.0.1-alpha.1"
 
