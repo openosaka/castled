@@ -21,19 +21,20 @@ exec $root_dir/target/debug/castled &
 server_pid=$!
 wait_port 6610
 
-run_client http 13346 --remote-port 6890
+run_client http 13316 --remote-port 6890
 client_pid1=$!
 wait_port 6890
 
-run_client tcp 13346 --remote-port 6891
+run_client tcp 13316 --remote-port 6891
 client_pid2=$!
 wait_port 6891
 
-RUST_LOG=INFO exec $cur_dir/.bin/file_server --port 13346 &
+RUST_LOG=INFO exec $cur_dir/.bin/file_server --port 13316 &
 file_server_pid=$!
+wait_port 13316
 
 dd if=/dev/zero of=/tmp/download_file1.txt bs=1K count=2 #(2K)
-dd if=/dev/zero of=/tmp/download_file3.txt bs=1M count=1 #(1G)
+dd if=/dev/zero of=/tmp/download_file3.txt bs=1M count=200 #(200M)
 
 test() {
   port=$1
