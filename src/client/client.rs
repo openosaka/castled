@@ -314,17 +314,20 @@ async fn handle_work_traffic(
     // rpc_client sends the data from reading the streaming_rx
     let (streaming_tx, streaming_rx) = mpsc::channel::<TrafficToServer>(64);
     let streaming_to_server = ReceiverStream::new(streaming_rx);
-    let connection_id = connection_id.to_string();
 
-    // the first message to notify the server this connection is started to send data
-    streaming_tx
-        .send(TrafficToServer {
-            connection_id: connection_id.clone(),
-            action: traffic_to_server::Action::Start as i32,
-            ..Default::default()
-        })
+    let mut streaming_response = rpc_client
+        .data(streaming_to_server)
         .await
-        .unwrap();
+        .unwrap()
+        .into_inner();
+
+    let connection_id = connection_id.to_string();
+    let streaming_tx_for_first_msg = streaming_tx.clone();
+    let start_message = TrafficToServer {
+        connection_id: connection_id.clone(),
+        action: traffic_to_server::Action::Start as i32,
+        ..Default::default()
+    };
 
     // write the data streaming response to transfer_tx,
     // then forward_traffic_to_local can read the data from transfer_rx
@@ -333,32 +336,26 @@ async fn handle_work_traffic(
     let (local_conn_established_tx, local_conn_established_rx) = mpsc::channel::<()>(1);
     let mut local_conn_established_rx = Some(local_conn_established_rx);
     tokio::spawn(async move {
-        let mut streaming_response = rpc_client
-            .data(streaming_to_server)
-            .await
+        if local_conn_established_rx
+            .take()
             .unwrap()
-            .into_inner();
+            .recv()
+            .await
+            .is_none()
+        {
+            return;
+        } else {
+            info!("local connection established");
+        }
 
-        let mut local_conn_established = false;
+        // the first message to notify the server this connection is started to send data
+        streaming_tx_for_first_msg
+            .send(start_message)
+            .await
+            .unwrap();
+
         loop {
             let result = streaming_response.next().await;
-
-            // if the local connection is not established, we should wait until it's established
-            if !local_conn_established {
-                if local_conn_established_rx
-                    .take()
-                    .unwrap()
-                    .recv()
-                    .await
-                    .is_none()
-                {
-                    debug!("connecting to local endpoint failed");
-                    return;
-                } else {
-                    info!("local connection established");
-                    local_conn_established = true;
-                }
-            }
 
             match result {
                 Some(Ok(traffic)) => {

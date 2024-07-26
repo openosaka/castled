@@ -52,9 +52,13 @@ impl Udp {
                                     data_receiver,
                                     client_cancel_receiver,
                                     remove_bridge_sender,
-                                } = super::init_data_sender_bridge(user_incoming_sender.clone())
-                                    .await
-                                    .unwrap();
+                                } = match super::init_data_sender_bridge(user_incoming_sender.clone()).await {
+                                    Ok(result) => result,
+                                    Err(err) => {
+                                        error!(err = ?err, "failed to init data sender bridge");
+                                        return
+                                    }
+                                };
 
                                 Self::transfer(&buf[..n], client_cancel_receiver, data_sender, data_receiver, &remote_writer, addr).await;
                                 remove_bridge_sender.cancel();

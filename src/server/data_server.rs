@@ -72,7 +72,7 @@ impl DataServer {
                                 Tcp::new(listener, conn_event_chan.clone())
                                     .serve(cancel)
                                     .await;
-                                info!("tcp listener on {} closed", port);
+                                info!("tcp closed on {}", port);
                             });
                             event
                                 .resp

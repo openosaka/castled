@@ -129,7 +129,18 @@ impl Http {
                 .unwrap();
         }
         let event_sender = sender.unwrap();
-        let bridge = init_data_sender_bridge(event_sender).await.unwrap();
+        let bridge = match init_data_sender_bridge(event_sender).await {
+            Ok(bridge) => bridge,
+            Err(err) => {
+                error!(err = ?err, "failed to create bridge");
+                return Response::builder()
+                    .status(502)
+                    .body(BoxBody::new(Full::new(Bytes::from_static(
+                        b"local server error",
+                    ))))
+                    .unwrap();
+            }
+        };
 
         Self::handle_http_request(req, bridge).await
     }

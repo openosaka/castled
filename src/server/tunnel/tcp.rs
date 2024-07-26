@@ -61,7 +61,15 @@ impl Tcp {
                         data_receiver,
                         client_cancel_receiver,
                         remove_bridge_sender
-                    } = super::init_data_sender_bridge(user_incoming_sender.clone()).await.unwrap();
+                    } = match super::init_data_sender_bridge(user_incoming_sender.clone()).await {
+                        Ok(result) => result,
+                        Err(err) => {
+                            error!(err = ?err, "failed to init data sender bridge");
+                            // we should continue to accept next connection,
+                            // return here will cause the tcp listener to shutdown
+                            continue;
+                        }
+                    };
 
                     let (stream, _addr) = result.unwrap();
                     tokio::spawn(async move {
