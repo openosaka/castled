@@ -34,7 +34,7 @@ impl Udp {
         let shutdown_listener = shutdown.clone();
         let (data_sender, data_receiver) = mpsc::channel(128);
         let transfer_manager =
-            TransferManager::new(self.user_incoming_sender.clone(), data_receiver);
+            TransferManager::new(shutdown.clone(), self.user_incoming_sender, data_receiver);
         tokio::spawn(async move {
             transfer_manager.run(socket2).await;
         });
@@ -76,16 +76,19 @@ impl SocketCreator for Udp {
 }
 
 struct TransferManager {
+    shutdown: CancellationToken,
     user_incoming_sender: mpsc::Sender<event::UserIncoming>,
     data_receiver: mpsc::Receiver<(Vec<u8>, SocketAddr)>,
 }
 
 impl TransferManager {
     fn new(
+        shutdown: CancellationToken,
         user_incoming_sender: mpsc::Sender<event::UserIncoming>,
         data_receiver: mpsc::Receiver<(Vec<u8>, SocketAddr)>,
     ) -> Self {
         Self {
+            shutdown,
             user_incoming_sender,
             data_receiver,
         }
@@ -124,8 +127,18 @@ impl TransferManager {
                         transferring.insert(socket_addr, transfer_tx.clone());
                         debug!(?socket_addr, "new transfer");
 
+
+                        let shutdown = self.shutdown.clone();
                         tokio::spawn(async move {
-                            TransferManager::transfer(transfer_rx, client_cancel_receiver, data_sender, data_receiver, &socket, socket_addr).await;
+                            Self::transfer(
+                                shutdown,
+                                transfer_rx,
+                                client_cancel_receiver,
+                                data_sender,
+                                data_receiver,
+                                &socket,
+                                socket_addr,
+                            ).await;
                             transferring.remove(&socket_addr);
                             remove_bridge_sender.cancel();
                         });
@@ -140,6 +153,7 @@ impl TransferManager {
     }
 
     async fn transfer(
+        shutdown: CancellationToken,
         mut transfer_rx: mpsc::Receiver<Vec<u8>>,
         client_cancel_receiver: CancellationToken,
         data_sender: mpsc::Sender<Vec<u8>>,
@@ -150,7 +164,12 @@ impl TransferManager {
         let read_transfer_send_to_bridge = async {
             loop {
                 select! {
-                    _ = client_cancel_receiver.cancelled() => {}
+                    _ = shutdown.cancelled() => {
+                        return
+                    }
+                    _ = client_cancel_receiver.cancelled() => {
+                        return
+                    }
                     data = transfer_rx.recv() => {
                         match data {
                             None => return,
@@ -174,6 +193,9 @@ impl TransferManager {
         let read_bridge_send_to_user = async {
             loop {
                 select! {
+                    _ = shutdown.cancelled() => {
+                        return
+                    }
                     _ = client_cancel_receiver.cancelled() => {
                         return;
                     }

@@ -42,6 +42,6 @@ func main() {
 		}
 
 		message := string(buffer[:n])
-		log.Printf("Received message from %s: %s\n", clientAddr, message)
+		log.Printf("Received message from %s: %s", clientAddr, message)
 	}
 }
