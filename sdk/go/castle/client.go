@@ -28,6 +28,7 @@ type options struct {
 }
 
 func newOptions() *options {
+	slog.SetLogLoggerLevel(slog.LevelDebug)
 	return &options{
 		logger: slog.Default(),
 	}
@@ -93,6 +94,12 @@ func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, <-c
 
 		var err error
 		defer func() {
+			select {
+			case <-ctx.Done():
+				// only treat the self cancel as a normal quit
+				err = nil
+			default:
+			}
 			quit <- err
 		}()
 
@@ -111,7 +118,7 @@ func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, <-c
 				return
 			}
 			if err != nil {
-				err = fmt.Errorf("failed to receive control message: %w", err)
+				// err = fmt.Errorf("failed to receive control message: %w", err)
 				return
 			}
 			c.logger.Debug("received control message", slog.Any("command", command))
@@ -130,8 +137,7 @@ func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, <-c
 
 			//TODO(sword): traffic control
 			go func() {
-				isUdp := tunnel.GetUdp() != nil
-				if err := c.work(ctx, isUdp, tunnel.LocalAddr, work); err != nil {
+				if err := c.work(ctx, tunnel, work); err != nil {
 					c.logger.Error("failed to process work command", slog.Any("error", err))
 				}
 			}()
@@ -141,7 +147,7 @@ func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, <-c
 	return payload.Init.AssignedEntrypoint, quit, nil
 }
 
-func (c *Client) work(ctx context.Context, isUdp bool, localAddr string, work *proto.ControlCommand_Work) error {
+func (c *Client) work(ctx context.Context, tunnel *Tunnel, work *proto.ControlCommand_Work) error {
 	connectionID := work.Work.ConnectionId
 
 	bidiStream, err := c.grpcClient.Data(ctx)
@@ -149,133 +155,110 @@ func (c *Client) work(ctx context.Context, isUdp bool, localAddr string, work *p
 		return fmt.Errorf("failed to create data stream: %w", err)
 	}
 
+	localAddr := tunnel.LocalAddr
+	isUdp := tunnel.GetUdp() != nil
+	var localConn net.Conn
 	if isUdp {
-		// localConn, err := net.Dial("udp", localAddr)
-		// if err != nil {
-		// 	err2 := bidiStream.Send(&proto.TrafficToServer{
-		// 		ConnectionId: connectionID,
-		// 		Action:       proto.TrafficToServer_Close,
-		// 	})
-		// 	if err2 != nil {
-		// 		c.logger.Error("failed to send close action to control server, the server maybe crashed", slog.Any("error", err2))
-		// 	}
-
-		// 	return fmt.Errorf("failed to dial to local address: %w", err)
-		// }
-
-		// if err := bidiStream.Send(&proto.TrafficToServer{
-		// 	ConnectionId: connectionID,
-		// 	Action:       proto.TrafficToServer_Start,
-		// }); err != nil {
-		// 	return fmt.Errorf("failed to send start action: %w", err)
-		// }
-
-		go func() {
-			//
-		}()
-
-		go func() {
-
-		}()
+		localConn, err = net.Dial("udp", localAddr)
 	} else {
-		localConn, err := net.Dial("tcp", localAddr)
-		if err != nil {
-			err2 := bidiStream.Send(&proto.TrafficToServer{
-				ConnectionId: connectionID,
-				Action:       proto.TrafficToServer_Close,
-			})
-			if err2 != nil {
-				c.logger.Error("failed to send close action to control server, the server maybe crashed", slog.Any("error", err2))
+		localConn, err = net.Dial("tcp", localAddr)
+	}
+	if err != nil {
+		err2 := bidiStream.Send(&proto.TrafficToServer{
+			ConnectionId: connectionID,
+			Action:       proto.TrafficToServer_Close,
+		})
+		if err2 != nil {
+			c.logger.Error("failed to send close action to control server, the server maybe crashed", slog.Any("error", err2))
+		}
+
+		return fmt.Errorf("failed to dial to local address: %w", err)
+	}
+
+	if err := bidiStream.Send(&proto.TrafficToServer{
+		ConnectionId: connectionID,
+		Action:       proto.TrafficToServer_Start,
+	}); err != nil {
+		return fmt.Errorf("failed to send start action: %w", err)
+	}
+
+	go func() {
+		// read from the stream
+		defer func() {
+			c.logger.Debug("quit reading")
+			if tcpConn, ok := localConn.(*net.TCPConn); ok {
+				tcpConn.CloseWrite()
+			}
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
 			}
 
-			return fmt.Errorf("failed to dial to local address: %w", err)
+			dataToClient, err := bidiStream.Recv()
+			if err == io.EOF || (dataToClient != nil && len(dataToClient.Data) == 0) {
+				c.logger.Debug("server closed the stream, most of times are because the server finished the work")
+				return
+			}
+			if err != nil {
+				c.logger.Error("failed to receive data", slog.Any("error", err))
+				return
+			}
+
+			n, err := localConn.Write(dataToClient.Data)
+			if err != nil {
+				c.logger.Error("failed to write data to local connection", slog.Any("error", err))
+				return
+			}
+			c.logger.Debug("wrote data to local connection", slog.Int("n", n))
+		}
+	}()
+
+	go func() {
+		// write to the stream
+		defer func() {
+			c.logger.Debug("quit writing")
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			buf := make([]byte, DEFAULT_BUFFER_SIZE)
+			n, err := localConn.Read(buf)
+			if err == io.EOF {
+				c.logger.Debug("no more data to read from local connection")
+				break
+			}
+			if err != nil {
+				c.logger.Error("failed to read data from local connection", slog.Any("error", err))
+				return
+			}
+			c.logger.Debug("read data from local connection", slog.Int("n", n))
+
+			if err := bidiStream.Send(&proto.TrafficToServer{
+				ConnectionId: connectionID,
+				Action:       proto.TrafficToServer_Sending,
+				Data:         buf[:n],
+			}); err != nil {
+				c.logger.Error("failed to send data to control server", slog.Any("error", err))
+				break
+			}
 		}
 
 		if err := bidiStream.Send(&proto.TrafficToServer{
 			ConnectionId: connectionID,
-			Action:       proto.TrafficToServer_Start,
+			Action:       proto.TrafficToServer_Finished,
 		}); err != nil {
-			return fmt.Errorf("failed to send start action: %w", err)
+			c.logger.Error("failed to send close action to control server", slog.Any("error", err))
 		}
-
-		go func() {
-			// read from the stream
-			defer func() {
-				c.logger.Debug("quit reading")
-				if tcpConn, ok := localConn.(*net.TCPConn); ok {
-					tcpConn.CloseWrite()
-				}
-			}()
-
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				dataToClient, err := bidiStream.Recv()
-				if err == io.EOF || len(dataToClient.Data) == 0 {
-					c.logger.Debug("server closed the stream, most of times are because the server finished the work")
-					return
-				}
-				if err != nil {
-					c.logger.Error("failed to receive data", slog.Any("error", err))
-					return
-				}
-
-				n, err := localConn.Write(dataToClient.Data)
-				if err != nil {
-					c.logger.Error("failed to write data to local connection", slog.Any("error", err))
-					return
-				}
-				c.logger.Debug("wrote data to local connection", slog.Int("n", n))
-			}
-		}()
-
-		go func() {
-			// write to the stream
-			defer func() {
-				c.logger.Debug("quit writing")
-			}()
-
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				buf := make([]byte, DEFAULT_BUFFER_SIZE)
-				n, err := localConn.Read(buf)
-				if err == io.EOF {
-					c.logger.Debug("no more data to read from local connection")
-					break
-				}
-				if err != nil {
-					c.logger.Error("failed to read data from local connection", slog.Any("error", err))
-					return
-				}
-				c.logger.Debug("read data from local connection", slog.Int("n", n))
-
-				if err := bidiStream.Send(&proto.TrafficToServer{
-					ConnectionId: connectionID,
-					Action:       proto.TrafficToServer_Sending,
-					Data:         buf[:n],
-				}); err != nil {
-					c.logger.Error("failed to send data to control server", slog.Any("error", err))
-					break
-				}
-			}
-
-			if err := bidiStream.Send(&proto.TrafficToServer{
-				ConnectionId: connectionID,
-				Action:       proto.TrafficToServer_Finished,
-			}); err != nil {
-				c.logger.Error("failed to send close action to control server", slog.Any("error", err))
-			}
-		}()
-	}
+	}()
 
 	return nil
 }

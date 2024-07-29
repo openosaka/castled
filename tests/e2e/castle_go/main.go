@@ -138,7 +138,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if _, err := rootCmd.ExecuteContextC(ctx); err != nil {
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		log.Fatal(err)
 	}
 }
