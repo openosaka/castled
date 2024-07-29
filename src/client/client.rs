@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use async_shutdown::{ShutdownManager, ShutdownSignal};
 use std::net::SocketAddr;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
@@ -12,6 +12,7 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
+use crate::io::AsyncUdpSocket;
 use crate::{
     constant,
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
@@ -331,7 +332,7 @@ async fn handle_work_traffic(
 
     // write the data streaming response to transfer_tx,
     // then forward_traffic_to_local can read the data from transfer_rx
-    let (transfer_tx, mut transfer_rx) = mpsc::channel::<TrafficToClient>(64);
+    let (transfer_tx, transfer_rx) = mpsc::channel::<TrafficToClient>(64);
 
     let (local_conn_established_tx, local_conn_established_rx) = mpsc::channel::<()>(1);
     let mut local_conn_established_rx = Some(local_conn_established_rx);
@@ -375,7 +376,7 @@ async fn handle_work_traffic(
     });
 
     let wrapper = TrafficToServerWrapper::new(connection_id.clone());
-    let mut writer = StreamingWriter::new(streaming_tx.clone(), wrapper);
+    let writer = StreamingWriter::new(streaming_tx.clone(), wrapper);
 
     if is_udp {
         tokio::spawn(async move {
@@ -410,30 +411,16 @@ async fn handle_work_traffic(
 
             local_conn_established_tx.send(()).await.unwrap();
 
-            let read_transfer_send_to_local = async {
-                while let Some(buf) = transfer_rx.recv().await {
-                    socket.send(&buf.data).await.unwrap();
-                }
-            };
-
-            let read_local_send_to_server = async {
-                loop {
-                    let mut buf = vec![0u8; 65507];
-                    let result = socket.recv(&mut buf).await;
-                    match result {
-                        Ok(n) => {
-                            writer.write_all(&buf[..n]).await.unwrap();
-                        }
-                        Err(err) => {
-                            error!(err = ?err, "failed to read from local endpoint");
-                            break;
-                        }
-                    }
-                }
-                writer.shutdown().await.unwrap();
-            };
-
-            tokio::join!(read_transfer_send_to_local, read_local_send_to_server);
+            if let Err(err) = forward_traffic_to_local(
+                AsyncUdpSocket::new(&socket),
+                AsyncUdpSocket::new(&socket),
+                StreamingReader::new(transfer_rx),
+                writer,
+            )
+            .await
+            {
+                debug!("failed to forward traffic to local: {:?}", err);
+            }
         });
     } else {
         tokio::spawn(async move {
@@ -485,8 +472,8 @@ async fn handle_work_traffic(
 async fn forward_traffic_to_local(
     local_r: impl AsyncRead + Unpin,
     mut local_w: impl AsyncWrite + Unpin,
-    remote_r: StreamingReader<TrafficToClient>,
-    mut remote_w: StreamingWriter<TrafficToServer>,
+    remote_r: impl AsyncRead + Unpin,
+    mut remote_w: impl AsyncWrite + Unpin,
 ) -> Result<()> {
     let remote_to_me_to_local = async {
         // read from remote, write to local
