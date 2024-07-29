@@ -3,8 +3,8 @@
 cd "$(dirname "$0")"
 
 go build -o .bin/ ./ping/ping.go
-go build -o .bin/file_server ./file_server/main.go
 go build -o .bin/castlego ./castle_go/main.go
+go build -o .bin/file_server ./file_server/main.go
 go build -o .bin/udprint ./udprint/main.go
 
 wait_port() {

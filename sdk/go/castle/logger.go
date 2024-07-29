@@ -1,4 +1,4 @@
-package client
+package castle
 
 type Logger interface {
 	Debug(msg string, args ...any)

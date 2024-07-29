@@ -1,4 +1,4 @@
-package client
+package castle
 
 import (
 	"github.com/openosaka/castled/sdk/go/proto"

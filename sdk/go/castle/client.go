@@ -1,4 +1,4 @@
-package client
+package castle
 
 import (
 	"context"
@@ -28,6 +28,7 @@ type options struct {
 }
 
 func newOptions() *options {
+	slog.SetLogLoggerLevel(slog.LevelDebug)
 	return &options{
 		logger: slog.Default(),
 	}
@@ -93,6 +94,12 @@ func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, <-c
 
 		var err error
 		defer func() {
+			select {
+			case <-ctx.Done():
+				// only treat the self cancel as a normal quit
+				err = nil
+			default:
+			}
 			quit <- err
 		}()
 
@@ -111,7 +118,7 @@ func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, <-c
 				return
 			}
 			if err != nil {
-				err = fmt.Errorf("failed to receive control message: %w", err)
+				// err = fmt.Errorf("failed to receive control message: %w", err)
 				return
 			}
 			c.logger.Debug("received control message", slog.Any("command", command))
@@ -130,8 +137,7 @@ func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, <-c
 
 			//TODO(sword): traffic control
 			go func() {
-				// TODO(sword): refactor using the tunnel to handle protocol specific
-				if err := c.work(ctx, tunnel.LocalAddr, work); err != nil {
+				if err := c.work(ctx, tunnel, work); err != nil {
 					c.logger.Error("failed to process work command", slog.Any("error", err))
 				}
 			}()
@@ -141,7 +147,7 @@ func (c *Client) StartTunnel(ctx context.Context, tunnel *Tunnel) ([]string, <-c
 	return payload.Init.AssignedEntrypoint, quit, nil
 }
 
-func (c *Client) work(ctx context.Context, localAddr string, work *proto.ControlCommand_Work) error {
+func (c *Client) work(ctx context.Context, tunnel *Tunnel, work *proto.ControlCommand_Work) error {
 	connectionID := work.Work.ConnectionId
 
 	bidiStream, err := c.grpcClient.Data(ctx)
@@ -149,7 +155,14 @@ func (c *Client) work(ctx context.Context, localAddr string, work *proto.Control
 		return fmt.Errorf("failed to create data stream: %w", err)
 	}
 
-	localConn, err := net.Dial("tcp", localAddr)
+	localAddr := tunnel.LocalAddr
+	isUdp := tunnel.GetUdp() != nil
+	var localConn net.Conn
+	if isUdp {
+		localConn, err = net.Dial("udp", localAddr)
+	} else {
+		localConn, err = net.Dial("tcp", localAddr)
+	}
 	if err != nil {
 		err2 := bidiStream.Send(&proto.TrafficToServer{
 			ConnectionId: connectionID,
@@ -186,7 +199,7 @@ func (c *Client) work(ctx context.Context, localAddr string, work *proto.Control
 			}
 
 			dataToClient, err := bidiStream.Recv()
-			if err == io.EOF || len(dataToClient.Data) == 0 {
+			if err == io.EOF || (dataToClient != nil && len(dataToClient.Data) == 0) {
 				c.logger.Debug("server closed the stream, most of times are because the server finished the work")
 				return
 			}
