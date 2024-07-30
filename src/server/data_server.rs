@@ -1,6 +1,7 @@
 use crate::{
     event::{self, ClientEventResponse, Payload},
     server::port::{Available, PortManager},
+    socket::create_tcp_listener,
 };
 
 use super::{
@@ -14,6 +15,8 @@ use super::{
 };
 use async_shutdown::ShutdownSignal;
 use bytes::Bytes;
+use rand::prelude::*;
+use rand_chacha::ChaCha8Rng;
 use std::sync::Arc;
 use tokio::{
     net::{TcpListener, UdpSocket},
@@ -22,17 +25,16 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
-use tracing::{error, info};
+use tracing::info;
 
 /// DataServer is responsible for handling the data transfer
 /// between user connection and Grpc Server(of Control Server).
 pub(crate) struct DataServer {
-    // castled provides a vhttp server for responding requests to the tunnel
-    // which is used different subdomains or domains, they still use the same port.
-    http_tunnel: Http,
+    vhttp_port: u16,
     http_registry: DynamicRegistry,
     entrypoint_config: EntrypointConfig,
     port_manager: PortManager,
+    rng: ChaCha8Rng,
 }
 
 impl DataServer {
@@ -42,11 +44,13 @@ impl DataServer {
             entrypoint_config.port_range.clone(),
             entrypoint_config.exclude_ports.clone(),
         );
+        let rng = ChaCha8Rng::from_entropy();
         Self {
-            http_registry: http_registry.clone(),
-            http_tunnel: Http::new(vhttp_port, Arc::new(Box::new(http_registry))),
+            vhttp_port,
+            http_registry,
             port_manager,
             entrypoint_config,
+            rng,
         }
     }
 
@@ -56,7 +60,7 @@ impl DataServer {
         mut receiver: mpsc::Receiver<event::ClientEvent>,
     ) -> anyhow::Result<()> {
         let this = Arc::new(self);
-        let http_tunnel = this.http_tunnel.clone();
+
         // start the vhttp tunnel, all the http requests to the vhttp server(with the vhttp_port)
         // will be handled by this http_tunnel.
         let cancel_w = CancellationToken::new();
@@ -66,7 +70,12 @@ impl DataServer {
             shutdown_listener.await;
             cancel_w.cancel();
         });
-        http_tunnel.serve(cancel).await?;
+
+        let http_tunnel = Http::new(Arc::new(Box::new(this.http_registry.clone())));
+        let tcp_listener = create_tcp_listener(this.vhttp_port).await?;
+        tokio::spawn(async move {
+            http_tunnel.serve_with_listener(tcp_listener, cancel).await;
+        });
 
         while let Some(event) = receiver.recv().await {
             match event.payload {
@@ -75,21 +84,21 @@ impl DataServer {
                         create_socket::<Tcp>(port, &mut this.port_manager.clone()).await;
                     match result {
                         Ok((available_port, listener)) => {
-                            let port = *available_port;
                             let cancel = event.close_listener;
                             let conn_event_chan = event.incoming_events;
+                            event
+                                .resp
+                                .send(ClientEventResponse::registered(
+                                    this.entrypoint_config
+                                        .make_entrypoint(&event.payload, *available_port),
+                                ))
+                                .unwrap(); // success
                             spawn(async move {
                                 Tcp::new(listener, conn_event_chan.clone())
                                     .serve(cancel)
                                     .await;
-                                info!(port, "tcp server closed");
+                                info!(port = *available_port, "tcp server closed");
                             });
-                            event
-                                .resp
-                                .send(ClientEventResponse::registered(
-                                    this.entrypoint_config.make_entrypoint(&event.payload, port),
-                                ))
-                                .unwrap(); // success
                         }
                         Err(status) => {
                             event
@@ -105,22 +114,22 @@ impl DataServer {
 
                     match result {
                         Ok((available_port, socket)) => {
-                            let port = *available_port;
                             let socket = socket;
                             let cancel = event.close_listener;
                             let conn_event_chan = event.incoming_events;
+                            event
+                                .resp
+                                .send(ClientEventResponse::registered(
+                                    this.entrypoint_config
+                                        .make_entrypoint(&event.payload, *available_port),
+                                ))
+                                .unwrap(); // success
                             spawn(async move {
                                 Udp::new(socket, conn_event_chan.clone())
                                     .serve(cancel)
                                     .await;
                                 info!(port = *available_port, "udp server closed");
                             });
-                            event
-                                .resp
-                                .send(ClientEventResponse::registered(
-                                    this.entrypoint_config.make_entrypoint(&event.payload, port),
-                                ))
-                                .unwrap(); // success
                         }
                         Err(status) => {
                             event
@@ -210,7 +219,7 @@ impl DataServer {
 
         if subdomain.is_empty() && random_subdomain {
             loop {
-                let subdomain2 = Bytes::from(generate_random_subdomain(8));
+                let subdomain2 = Bytes::from(self.generate_random_subdomain(8).await);
                 if !self.http_registry.subdomain_registered(&subdomain2) {
                     *subdomain = subdomain2;
                     break;
@@ -231,18 +240,17 @@ impl DataServer {
         }
 
         if *port != 0 {
-            if let Err(err) = Http::new(
-                *port,
-                Arc::new(Box::new(FixedRegistry::new(conn_event_chan))),
-            )
-            .serve(shutdown)
-            .await
-            {
-                error!(port = *port, err = ?err, "failed to start http server");
-                Some(Status::internal(err.to_string()))
-            } else {
-                info!(port = *port, "http server started");
-                None
+            match create_socket::<Tcp>(*port, &mut self.port_manager.clone()).await {
+                Ok((available_port, listener)) => {
+                    spawn(async move {
+                        info!(port = *available_port, "http server started");
+                        Http::new(Arc::new(Box::new(FixedRegistry::new(conn_event_chan))))
+                            .serve_with_listener(listener, shutdown)
+                            .await;
+                    });
+                    None
+                }
+                Err(status) => Some(status),
             }
         } else {
             let result = create_socket::<Tcp>(*port, &mut self.port_manager.clone()).await;
@@ -251,11 +259,10 @@ impl DataServer {
                     *port = *available_port;
                     let conn_event_chan = conn_event_chan.clone();
                     spawn(async move {
-                        Http::new(
-                            *available_port,
-                            Arc::new(Box::new(FixedRegistry::new(conn_event_chan))),
-                        )
-                        .serve_with_listener(listener, shutdown);
+                        Http::new(Arc::new(Box::new(FixedRegistry::new(conn_event_chan))))
+                            .serve_with_listener(listener, shutdown)
+                            .await;
+                        drop(available_port);
                     });
                     None
                 }
@@ -263,16 +270,16 @@ impl DataServer {
             }
         }
     }
-}
 
-fn generate_random_subdomain(length: usize) -> String {
-    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let mut rng = fastrand::Rng::new();
-    let subdomain: String = (0..length)
-        .map(|_| {
-            let idx = rng.u8(..CHARSET.len() as u8) as usize;
-            CHARSET[idx] as char
-        })
-        .collect();
-    subdomain
+    async fn generate_random_subdomain(&self, length: usize) -> String {
+        let mut rng = self.rng.clone();
+        static CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let subdomain: String = (0..length)
+            .map(|_| {
+                let idx: usize = rng.gen_range(0..CHARSET.len());
+                CHARSET[idx] as char
+            })
+            .collect();
+        subdomain
+    }
 }

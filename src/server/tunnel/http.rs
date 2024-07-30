@@ -1,6 +1,5 @@
 use crate::bridge::BridgeData;
 use crate::event::{self, IncomingEventSender};
-use crate::socket::create_tcp_listener;
 
 use super::{init_data_sender_bridge, BridgeResult};
 use anyhow::{Context as _, Result};
@@ -23,7 +22,6 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
-use tonic::Status;
 use tracing::{debug, error, info, info_span, Instrument as _};
 
 static EMPTY_HOST: HeaderValue = HeaderValue::from_static("");
@@ -31,7 +29,6 @@ const MAX_HEADERS: usize = 124;
 const MAX_HEADER_SIZE: usize = 4 * 1024; // 4k
 
 pub(crate) struct Http {
-    port: u16,
     lookup: Arc<Box<dyn LookupRequest>>,
 }
 
@@ -47,77 +44,60 @@ pub(crate) trait LookupRequest: Send + Sync {
 impl Clone for Http {
     fn clone(&self) -> Self {
         Self {
-            port: self.port,
             lookup: Arc::clone(&self.lookup),
         }
     }
 }
 
 impl Http {
-    pub(crate) fn new(port: u16, lookup: Arc<Box<dyn LookupRequest>>) -> Self {
-        info!(port, "http server starting on port");
-        Self { port, lookup }
+    pub(crate) fn new(lookup: Arc<Box<dyn LookupRequest>>) -> Self {
+        Self { lookup }
     }
 
-    pub(crate) async fn serve(self, shutdown: CancellationToken) -> Result<(), Status> {
-        let vhttp_listener = tokio::select! {
-            _ = shutdown.cancelled() => {
-                return Ok(());
-            },
-            listener = create_tcp_listener(self.port) => match listener {
-                Ok(listener) => listener,
-                Err(err) => return Err(err),
-            }
-        };
-
-        self.serve_with_listener(vhttp_listener, shutdown.clone());
-
-        Ok(())
-    }
-
-    pub(crate) fn serve_with_listener(self, listener: TcpListener, shutdown: CancellationToken) {
+    pub(crate) async fn serve_with_listener(
+        self,
+        listener: TcpListener,
+        cancel: CancellationToken,
+    ) {
         let this = Arc::new(self);
         let http1_builder = Arc::new(http1::Builder::new());
-        let vhttp_handler = async move {
-            loop {
-                let shutdown = shutdown.clone();
-                tokio::select! {
-                    _ = shutdown.cancelled() => {
-                        break;
-                    },
-                    Ok((stream, _addr)) = listener.accept() => {
-                        let this = Arc::clone(&this);
-                        let http1_builder = Arc::clone(&http1_builder);
 
-                        tokio::spawn(async move {
-                            let io = TokioIo::new(stream);
+        loop {
+            let cancel = cancel.clone();
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    break;
+                },
+                Ok((stream, _addr)) = listener.accept() => {
+                    let this = Arc::clone(&this);
+                    let http1_builder = Arc::clone(&http1_builder);
 
-                            let handler = async move {
-                                let new_service = service_fn(move |req| {
-                                    let http_tunnel = this.clone();
-                                    async move {
-                                        Ok::<Response<BoxBody<Bytes, Infallible>>, hyper::Error>(
-                                            http_tunnel.call(req).await,
-                                        )
-                                    }
-                                });
+                    tokio::spawn(async move {
+                        let io = TokioIo::new(stream);
 
-                                tokio::select! {
-                                    _ = shutdown.cancelled() => {}
-                                    _ = http1_builder.serve_connection(io, new_service) => {
-                                        info!("http1 connection closed");
-                                    }
+                        let handler = async move {
+                            let new_service = service_fn(move |req| {
+                                let http_tunnel = this.clone();
+                                async move {
+                                    Ok::<Response<BoxBody<Bytes, Infallible>>, hyper::Error>(
+                                        http_tunnel.call(req).await,
+                                    )
                                 }
-                            }.instrument(info_span!("vhttp_handler"));
-                            tokio::task::spawn(handler);
-                        });
-                    }
+                            });
+
+                            tokio::select! {
+                                _ = cancel.cancelled() => {}
+                                _ = http1_builder.serve_connection(io, new_service) => {
+                                    info!("http1 connection closed");
+                                }
+                            }
+                        }.instrument(info_span!("vhttp_handler"));
+                        tokio::task::spawn(handler);
+                    });
                 }
             }
-            info!(port = this.port, "http server stopped")
         }
-        .instrument(info_span!("vhttp listener"));
-        tokio::spawn(vhttp_handler);
+        info!("http server stopped");
     }
 
     async fn call(&self, req: Request<Incoming>) -> Response<BoxBody<Bytes, Infallible>> {

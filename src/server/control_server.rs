@@ -117,7 +117,7 @@ impl Server {
                 .await
         });
 
-        info!("starting control server on: {}", addr);
+        info!(?addr, "starting control server");
 
         let mut control_server = self.control_server;
         let run_control_server = async move {

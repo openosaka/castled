@@ -7,6 +7,7 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
+use tracing::error;
 use uuid::Uuid;
 
 use super::port::{Available, PortManager};
@@ -90,24 +91,38 @@ pub(crate) async fn create_socket<T: SocketCreator>(
     port_manager: &mut PortManager,
 ) -> anyhow::Result<(Available, T::Output), Status> {
     if port > 0 {
-        let socket = T::create_socket(port).await?;
-        Ok((port.into(), socket))
+        if !port_manager.has(port) {
+            return Err(Status::invalid_argument("port is not in the range"));
+        }
+
+        match port_manager.take(port) {
+            None => Err(Status::internal("port is taken, should not happen")),
+            Some(mut available_port) => match T::create_socket(port).await {
+                Err(e) => {
+                    available_port.unavailable();
+                    Err(e)
+                }
+                Ok(socket) => Ok((available_port, socket)),
+            },
+        }
     } else {
-        // refer: https://github.com/ekzhang/bore/blob/v0.5.1/src/server.rs#L88
-        // todo: a better way to find a free port
-        loop {
-            let port: Available = match port_manager.get() {
+        for _ in 0..150 {
+            let mut available_port: Available = match port_manager.get() {
                 None => {
                     return Err(Status::resource_exhausted("no available port"));
                 }
                 Some(port) => port,
             };
-            let result = T::create_socket(*port).await;
-            if result.is_err() {
-                port_manager.remove(*port);
-                continue;
+            let port = *available_port;
+            match T::create_socket(port).await {
+                Err(err) => {
+                    error!(?err, port, "failed to create socket");
+                    available_port.unavailable();
+                    continue;
+                }
+                Ok(socket) => return Ok((available_port, socket)),
             }
-            return Ok((port, result.unwrap()));
         }
+        Err(Status::resource_exhausted("no available port"))
     }
 }
