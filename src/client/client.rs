@@ -1,28 +1,26 @@
 use anyhow::{Context as _, Result};
 use async_shutdown::{ShutdownManager, ShutdownSignal};
-use std::{net::SocketAddr, pin::Pin};
+use std::{net::SocketAddr, sync::Arc};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{transport::Channel, Response, Status, Streaming};
 use tracing::{debug, error, info, instrument, span};
 
 use tokio::{
     io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
-    net::{TcpStream, UdpSocket},
     select,
     sync::{mpsc, oneshot},
 };
 
+use crate::socket::Dialer;
 use crate::{
     constant,
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
     pb::{
-        self, control_command::Payload, traffic_to_server, tunnel::Config,
+        self, control_command::Payload, traffic_to_server,
         tunnel_service_client::TunnelServiceClient, ControlCommand, RegisterReq, TrafficToClient,
         TrafficToServer,
     },
-    socket::{dial_tcp, dial_udp},
 };
-use crate::{io::AsyncUdpSocket, socket::DialFn};
 
 use super::tunnel::Tunnel;
 
@@ -85,13 +83,13 @@ impl Client {
     ) -> Result<Vec<String>> {
         let (entrypoint_tx, entrypoint_rx) = oneshot::channel();
         let pb_tunnel = tunnel.config.to_pb_tunnel(tunnel.name);
-        let local_endpoint = tunnel.local_endpoint;
+        let dialer = tunnel.dialer;
 
         tokio::spawn(async move {
             let run_tunnel = self.handle_tunnel(
                 shutdown.wait_shutdown_triggered(),
                 pb_tunnel,
-                local_endpoint,
+                dialer,
                 Some(move |entrypoint| {
                     let _ = entrypoint_tx.send(entrypoint);
                 }),
@@ -186,11 +184,10 @@ impl Client {
         &self,
         shutdown: ShutdownSignal<i8>,
         tunnel: pb::Tunnel,
-        local_endpoint: SocketAddr,
+        dial: Dialer,
         hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
     ) -> Result<()> {
         let mut rpc_client = self.grpc_client.clone();
-        let is_udp = matches!(tunnel.config, Some(Config::Udp(_)));
         let register = self.register_tunnel(&mut rpc_client, tunnel);
 
         tokio::select! {
@@ -203,8 +200,7 @@ impl Client {
                     shutdown.clone(),
                     rpc_client,
                     register_resp,
-                    local_endpoint,
-                    is_udp,
+                    dial,
                     hook,
                 ).await
             }
@@ -218,8 +214,7 @@ impl Client {
         shutdown: ShutdownSignal<i8>,
         rpc_client: TunnelServiceClient<Channel>,
         register_resp: tonic::Response<Streaming<ControlCommand>>,
-        local_endpoint: SocketAddr,
-        is_udp: bool,
+        dialer: Dialer,
         mut hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
     ) -> Result<()> {
         let mut control_stream = register_resp.into_inner();
@@ -231,14 +226,8 @@ impl Client {
             hook(entrypoint);
         }
 
-        self.start_streaming(
-            shutdown,
-            &mut control_stream,
-            rpc_client,
-            local_endpoint,
-            is_udp,
-        )
-        .await
+        self.start_streaming(shutdown, &mut control_stream, rpc_client, dialer)
+            .await
     }
 
     async fn start_streaming(
@@ -246,9 +235,9 @@ impl Client {
         shutdown: ShutdownSignal<i8>,
         control_stream: &mut Streaming<ControlCommand>,
         rpc_client: TunnelServiceClient<Channel>,
-        local_endpoint: SocketAddr,
-        is_udp: bool,
+        dialer: Dialer,
     ) -> Result<()> {
+        let dialer = Arc::new(dialer);
         loop {
             tokio::select! {
                 result = control_stream.next() => {
@@ -270,8 +259,7 @@ impl Client {
                             if let Err(err) = handle_work_traffic(
                                 rpc_client.clone() /* cheap clone operation */,
                                 &work.connection_id,
-                                local_endpoint,
-                                is_udp,
+                                dialer.clone(),
                             ).await {
                                 error!(err = ?err, "failed to handle work traffic");
                             } else {
@@ -309,8 +297,7 @@ async fn new_rpc_client(control_addr: SocketAddr) -> Result<TunnelServiceClient<
 async fn handle_work_traffic(
     mut rpc_client: TunnelServiceClient<Channel>,
     connection_id: &str,
-    local_endpoint: SocketAddr,
-    is_udp: bool,
+    dialer: Arc<Dialer>,
 ) -> Result<()> {
     // write response to the streaming_tx
     // rpc_client sends the data from reading the streaming_rx
@@ -379,15 +366,8 @@ async fn handle_work_traffic(
     let wrapper = TrafficToServerWrapper::new(connection_id.clone());
     let writer = StreamingWriter::new(streaming_tx.clone(), wrapper);
 
-    let dial_fn: DialFn;
-    if is_udp {
-        dial_fn = |endpoint| Box::pin(dial_udp(endpoint));
-    } else {
-        dial_fn = |endpoint| Box::pin(dial_tcp(endpoint));
-    }
-
     tokio::spawn(async move {
-        match dial_fn(local_endpoint).await {
+        match dialer.dial().await {
             Ok((local_r, local_w)) => {
                 local_conn_established_tx.send(()).await.unwrap();
                 if let Err(err) =
@@ -398,10 +378,10 @@ async fn handle_work_traffic(
             }
             Err(err) => {
                 error!(
-                        ?local_endpoint,
-                        ?err,
-                        "failed to connect to local endpoint, so let's notify the server to close the user connection",
-                    );
+                    local_endpoint = ?dialer.addr(),
+                    ?err,
+                    "failed to connect to local endpoint, so let's notify the server to close the user connection",
+                );
 
                 streaming_tx
                     .send(TrafficToServer {

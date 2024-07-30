@@ -82,6 +82,37 @@ impl<'a> AsyncWrite for AsyncUdpSocket<'a> {
     }
 }
 
+/// Dialer for connecting to a endpoint to get a async reader and a async writer.
+///
+/// # Examples
+///
+/// ```
+/// use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+///
+/// let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+/// let dialer = Dialer::new(|addr| Box::pin(dial_tcp(addr)), socket);
+/// let (r, w) = dialer.dial().await.unwrap();
+/// ```
+#[derive(Debug)]
+pub(crate) struct Dialer {
+    dial: DialFn,
+    addr: SocketAddr,
+}
+
+impl Dialer {
+    pub(crate) fn new(dial: DialFn, addr: SocketAddr) -> Self {
+        Self { dial, addr }
+    }
+
+    pub(crate) fn dial(&self) -> Pin<Box<dyn std::future::Future<Output = DialResult> + Send>> {
+        (self.dial)(self.addr)
+    }
+
+    pub(crate) fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+}
+
 pub(crate) type DialResult = Result<
     (
         Box<dyn AsyncRead + Unpin + Send>,
