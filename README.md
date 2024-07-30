@@ -1,5 +1,7 @@
 # Castle
 
+[![Crates.io](https://img.shields.io/crates/v/castled.svg)](https://crates.io/crates/castled)
+[![Go Pkg](https://img.shields.io/github/v/tag/openosaka/castled?label=gopkg)](https://pkg.go.dev/github.com/openosaka/castled)
 [![CI Test](https://github.com/openosaka/castled/actions/workflows/ci.yaml/badge.svg)](https://github.com/openosaka/castled/actions/workflows/ci.yaml)
 [![License](https://img.shields.io/crates/l/castled)](https://github.com/openosaka/castled/blob/main/LICENSE)
 
