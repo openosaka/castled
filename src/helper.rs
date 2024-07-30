@@ -2,7 +2,7 @@ use tonic::Status;
 
 use crate::pb::RegisterReq;
 
-pub fn validate_register_req(req: &RegisterReq) -> Option<Status> {
+pub(crate) fn validate_register_req(req: &RegisterReq) -> Option<Status> {
     if req.tunnel.is_none() {
         return Some(Status::invalid_argument("tunnel is required"));
     }

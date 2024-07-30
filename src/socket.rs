@@ -87,16 +87,6 @@ impl<'a> AsyncWrite for AsyncUdpSocket<'a> {
 }
 
 /// Dialer for connecting to a endpoint to get a async reader and a async writer.
-///
-/// # Examples
-///
-/// ```
-/// use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-///
-/// let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-/// let dialer = Dialer::new(|addr| Box::pin(dial_tcp(addr)), socket);
-/// let (r, w) = dialer.dial().await.unwrap();
-/// ```
 #[derive(Debug)]
 pub(crate) struct Dialer {
     dial: DialFn,
@@ -104,14 +94,21 @@ pub(crate) struct Dialer {
 }
 
 impl Dialer {
+    /// Create a new dialer.
     pub(crate) fn new(dial: DialFn, addr: SocketAddr) -> Self {
         Self { dial, addr }
     }
 
+    /// Dial the endpoint.
+    ///
+    /// # Returns
+    ///
+    /// A future that resolves to a async reader and a async writer.
     pub(crate) fn dial(&self) -> Pin<Box<dyn std::future::Future<Output = DialResult> + Send>> {
         (self.dial)(self.addr)
     }
 
+    /// Expose the address of the dialer.
     pub(crate) fn addr(&self) -> SocketAddr {
         self.addr
     }
@@ -152,4 +149,41 @@ pub(crate) async fn dial_udp(local_endpoint: SocketAddr) -> DialResult {
         Box::new(AsyncUdpSocket::new(socket)),
         Box::new(AsyncUdpSocket::new(socket)),
     ))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::net::TcpListener as StdTcpListener;
+
+    #[tokio::test]
+    async fn test_tcp_listener_and_dialer() {
+        let port = free_port().unwrap();
+        let listener = create_tcp_listener(port).await.unwrap();
+
+        let dialer = Dialer::new(
+            |addr| Box::pin(dial_tcp(addr)),
+            listener.local_addr().unwrap(),
+        );
+        dialer.dial().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_udp_socket_and_dialer() {
+        let port = free_port().unwrap();
+        let socket = create_udp_socket(port).await.unwrap();
+
+        let dialer = Dialer::new(
+            |addr| Box::pin(dial_udp(addr)),
+            socket.local_addr().unwrap(),
+        );
+        dialer.dial().await.unwrap();
+    }
+
+    /// free_port returns a free port number for testing.
+    fn free_port() -> std::io::Result<u16> {
+        let listener = StdTcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        Ok(port)
+    }
 }
