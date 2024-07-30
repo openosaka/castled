@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use crate::{bridge::BridgeData, event, helper::create_udp_socket, server::tunnel::BridgeResult};
+use crate::{bridge::BridgeData, event, server::tunnel::BridgeResult, socket::create_udp_socket};
 use dashmap::DashMap;
 use tokio::{net::UdpSocket, select, sync::mpsc};
 use tokio_util::sync::CancellationToken;

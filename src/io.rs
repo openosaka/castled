@@ -8,7 +8,6 @@ use std::fmt::Debug;
 use std::task::{Context, Poll};
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
-use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::{io, sync::mpsc::Sender};
 use tokio_util::sync::CancellationToken;
@@ -264,51 +263,3 @@ macro_rules! generate_async_write_impl {
 
 generate_async_write_impl!(TrafficToServer);
 generate_async_write_impl!(Vec<u8>);
-
-pub(crate) struct AsyncUdpSocket<'a> {
-    socket: &'a UdpSocket,
-}
-
-impl<'a> AsyncUdpSocket<'a> {
-    pub(crate) fn new(socket: &'a UdpSocket) -> Self {
-        Self { socket }
-    }
-}
-
-impl<'a> AsyncRead for AsyncUdpSocket<'a> {
-    fn poll_read(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        match self.get_mut().socket.poll_recv_from(cx, buf) {
-            Poll::Ready(Ok(_addr)) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-impl<'a> AsyncWrite for AsyncUdpSocket<'a> {
-    fn poll_write(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::result::Result<usize, std::io::Error>> {
-        self.get_mut().socket.poll_send(cx, buf)
-    }
-
-    fn poll_flush(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), std::io::Error>> {
-        Poll::Ready(Ok(())) // No-op for UDP
-    }
-
-    fn poll_shutdown(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), std::io::Error>> {
-        Poll::Ready(Ok(())) // No-op for UDP
-    }
-}

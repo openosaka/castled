@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use async_shutdown::{ShutdownManager, ShutdownSignal};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, pin::Pin};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{transport::Channel, Response, Status, Streaming};
 use tracing::{debug, error, info, instrument, span};
@@ -12,7 +12,6 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
-use crate::io::AsyncUdpSocket;
 use crate::{
     constant,
     io::{StreamingReader, StreamingWriter, TrafficToServerWrapper},
@@ -21,7 +20,9 @@ use crate::{
         tunnel_service_client::TunnelServiceClient, ControlCommand, RegisterReq, TrafficToClient,
         TrafficToServer,
     },
+    socket::{dial_tcp, dial_udp},
 };
+use crate::{io::AsyncUdpSocket, socket::DialFn};
 
 use super::tunnel::Tunnel;
 
@@ -378,56 +379,29 @@ async fn handle_work_traffic(
     let wrapper = TrafficToServerWrapper::new(connection_id.clone());
     let writer = StreamingWriter::new(streaming_tx.clone(), wrapper);
 
+    let dial_fn: DialFn;
     if is_udp {
-        tokio::spawn(async move {
-            let local_addr: SocketAddr = if local_endpoint.is_ipv4() {
-                "0.0.0.0:0"
-            } else {
-                "[::]:0"
-            }
-            .parse()
-            .unwrap();
-            let socket = UdpSocket::bind(local_addr).await;
-            if socket.is_err() {
-                error!(err = ?socket.err(), "failed to init udp socket, so let's notify the server to close the user connection");
-
-                streaming_tx
-                    .send(TrafficToServer {
-                        connection_id: connection_id.to_string(),
-                        action: traffic_to_server::Action::Close as i32,
-                        ..Default::default()
-                    })
-                    .await
-                    .context("terrible, the server may be crashed")
-                    .unwrap();
-                return;
-            }
-
-            let socket = socket.unwrap();
-            let result = socket.connect(local_endpoint).await;
-            if let Err(err) = result {
-                error!(err = ?err, "failed to connect to local endpoint, so let's notify the server to close the user connection");
-            }
-
-            local_conn_established_tx.send(()).await.unwrap();
-
-            if let Err(err) = forward_traffic_to_local(
-                AsyncUdpSocket::new(&socket),
-                AsyncUdpSocket::new(&socket),
-                StreamingReader::new(transfer_rx),
-                writer,
-            )
-            .await
-            {
-                debug!("failed to forward traffic to local: {:?}", err);
-            }
-        });
+        dial_fn = |endpoint| Box::pin(dial_udp(endpoint));
     } else {
-        tokio::spawn(async move {
-            // TODO(sword): use a connection pool to reuse the tcp connection
-            let local_conn = TcpStream::connect(local_endpoint).await;
-            if local_conn.is_err() {
-                error!("failed to connect to local endpoint {}, so let's notify the server to close the user connection", local_endpoint);
+        dial_fn = |endpoint| Box::pin(dial_tcp(endpoint));
+    }
+
+    tokio::spawn(async move {
+        match dial_fn(local_endpoint).await {
+            Ok((local_r, local_w)) => {
+                local_conn_established_tx.send(()).await.unwrap();
+                if let Err(err) =
+                    transfer(local_r, local_w, StreamingReader::new(transfer_rx), writer).await
+                {
+                    debug!("failed to forward traffic to local: {:?}", err);
+                }
+            }
+            Err(err) => {
+                error!(
+                        ?local_endpoint,
+                        ?err,
+                        "failed to connect to local endpoint, so let's notify the server to close the user connection",
+                    );
 
                 streaming_tx
                     .send(TrafficToServer {
@@ -438,30 +412,14 @@ async fn handle_work_traffic(
                     .await
                     .context("terrible, the server may be crashed")
                     .unwrap();
-                return;
             }
-
-            let mut local_conn = local_conn.unwrap();
-            let (local_r, local_w) = local_conn.split();
-            local_conn_established_tx.send(()).await.unwrap();
-
-            if let Err(err) = forward_traffic_to_local(
-                local_r,
-                local_w,
-                StreamingReader::new(transfer_rx),
-                writer,
-            )
-            .await
-            {
-                debug!("failed to forward traffic to local: {:?}", err);
-            }
-        });
-    }
+        }
+    });
 
     Ok(())
 }
 
-/// Forwards the traffic from the server to the local endpoint.
+/// transfer the traffic from the server to the local endpoint.
 ///
 /// Try to imagine the current client is yourself,
 /// your mission is to forward the traffic from the server to the local,
@@ -469,7 +427,7 @@ async fn handle_work_traffic(
 /// in this process, there are two underlying connections:
 /// 1. remote <=> me
 /// 2. me     <=> local
-async fn forward_traffic_to_local(
+async fn transfer(
     local_r: impl AsyncRead + Unpin,
     mut local_w: impl AsyncWrite + Unpin,
     remote_r: impl AsyncRead + Unpin,
