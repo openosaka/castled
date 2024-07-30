@@ -1,3 +1,4 @@
+//! Socket utilities for creating listeners, async readers, writers, and dialers.
 use std::{
     net::SocketAddr,
     pin::Pin,
@@ -11,12 +12,14 @@ use tokio::{
 use tonic::Status;
 use tracing::error;
 
+/// create a tcp listener.
 pub(crate) async fn create_tcp_listener(port: u16) -> Result<TcpListener, Status> {
     TcpListener::bind(("0.0.0.0", port))
         .await
         .map_err(map_bind_error)
 }
 
+/// create a udp socket.
 pub(crate) async fn create_udp_socket(port: u16) -> Result<UdpSocket, Status> {
     UdpSocket::bind(("0.0.0.0", port))
         .await
@@ -34,6 +37,7 @@ fn map_bind_error(err: std::io::Error) -> Status {
     }
 }
 
+/// Async reader for a udp connection.
 pub(crate) struct AsyncUdpSocket<'a> {
     socket: &'a UdpSocket,
 }
@@ -113,6 +117,7 @@ impl Dialer {
     }
 }
 
+/// Result of dialing a endpoint.
 pub(crate) type DialResult = Result<
     (
         Box<dyn AsyncRead + Unpin + Send>,
@@ -121,15 +126,18 @@ pub(crate) type DialResult = Result<
     Box<dyn std::error::Error + Send + Sync>,
 >;
 
+/// Function for dialing a endpoint to get a async reader and a async writer.
 pub(crate) type DialFn =
     fn(SocketAddr) -> Pin<Box<dyn std::future::Future<Output = DialResult> + Send>>;
 
+/// Dial a tcp endpoint.
 pub(crate) async fn dial_tcp(local_endpoint: SocketAddr) -> DialResult {
     let local_conn = TcpStream::connect(local_endpoint).await?;
     let (r, w) = local_conn.into_split();
     Ok((Box::new(r), Box::new(w)))
 }
 
+/// Dial a udp endpoint.
 pub(crate) async fn dial_udp(local_endpoint: SocketAddr) -> DialResult {
     let local_addr: SocketAddr = if local_endpoint.is_ipv4() {
         "0.0.0.0:0"
