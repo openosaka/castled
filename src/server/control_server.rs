@@ -38,7 +38,7 @@ type DataStream = Pin<Box<dyn Stream<Item = GrpcResult<TrafficToClient>> + Send>
 ///
 /// We treat the control server is grpc server as well, in the concept,
 /// they are same thing.
-/// Although the grpc server provides a [`crate::protocol::pb::tunnel_service_server::TunnelService::data`],
+/// Although the grpc server provides a [`crate::pb::tunnel_service_server::TunnelService::data`],
 /// it's similar to the data server(a little), but in the `data` function body,
 /// the most of work is to forward the data from client to data server.
 /// We can understand this is a tunnel between the client and the data server.

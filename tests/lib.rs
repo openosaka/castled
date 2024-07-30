@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 mod common;
 
 use crate::common::free_port;

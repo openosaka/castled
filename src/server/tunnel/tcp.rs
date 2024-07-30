@@ -1,8 +1,8 @@
 use crate::{
     event,
-    helper::create_tcp_listener,
     io::{StreamingReader, StreamingWriter, VecWrapper},
     server::tunnel::BridgeResult,
+    socket::create_tcp_listener,
 };
 use anyhow::Context as _;
 use tokio::{

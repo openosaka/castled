@@ -1,6 +1,6 @@
 use crate::bridge::BridgeData;
 use crate::event::{self, IncomingEventSender};
-use crate::helper::create_tcp_listener;
+use crate::socket::create_tcp_listener;
 
 use super::{init_data_sender_bridge, BridgeResult};
 use anyhow::{Context as _, Result};

@@ -4,13 +4,16 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 
-use crate::pb::{self, tunnel, HttpConfig, TcpConfig, UdpConfig};
+use crate::{
+    pb::{self, tunnel, HttpConfig, TcpConfig, UdpConfig},
+    socket::{dial_tcp, dial_udp, Dialer},
+};
 
 /// Tunnel configuration for the client.
 #[derive(Debug)]
 pub struct Tunnel<'a> {
     pub(crate) name: &'a str,
-    pub(crate) local_endpoint: SocketAddr,
+    pub(crate) dialer: Dialer,
     pub(crate) config: RemoteConfig<'a>,
 }
 
@@ -19,7 +22,14 @@ impl<'a> Tunnel<'a> {
     pub fn new(name: &'a str, local_endpoint: SocketAddr, config: RemoteConfig<'a>) -> Self {
         Self {
             name,
-            local_endpoint,
+            dialer: Dialer::new(
+                match config {
+                    RemoteConfig::Tcp(_) => |endpoint| Box::pin(dial_tcp(endpoint)),
+                    RemoteConfig::Udp(_) => |endpoint| Box::pin(dial_udp(endpoint)),
+                    RemoteConfig::Http(_) => |endpoint| Box::pin(dial_tcp(endpoint)),
+                },
+                local_endpoint,
+            ),
             config,
         }
     }
