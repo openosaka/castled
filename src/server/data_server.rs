@@ -1,4 +1,7 @@
-use crate::event::{self, ClientEventResponse, Payload};
+use crate::{
+    event::{self, ClientEventResponse, Payload},
+    server::port::{Available, PortManager},
+};
 
 use super::{
     tunnel::{
@@ -29,14 +32,20 @@ pub(crate) struct DataServer {
     http_tunnel: Http,
     http_registry: DynamicRegistry,
     entrypoint_config: EntrypointConfig,
+    port_manager: PortManager,
 }
 
 impl DataServer {
     pub(crate) fn new(vhttp_port: u16, entrypoint_config: EntrypointConfig) -> Self {
         let http_registry = DynamicRegistry::new();
+        let port_manager = PortManager::new(
+            entrypoint_config.port_range.clone(),
+            entrypoint_config.exclude_ports.clone(),
+        );
         Self {
             http_registry: http_registry.clone(),
             http_tunnel: Http::new(vhttp_port, Arc::new(Box::new(http_registry))),
+            port_manager,
             entrypoint_config,
         }
     }
@@ -62,10 +71,11 @@ impl DataServer {
         while let Some(event) = receiver.recv().await {
             match event.payload {
                 event::Payload::RegisterTcp { port } => {
-                    let result: Result<(u16, TcpListener), tonic::Status> =
-                        create_socket::<Tcp>(port, this.entrypoint_config.port_range.clone()).await;
+                    let result: Result<(Available, TcpListener), tonic::Status> =
+                        create_socket::<Tcp>(port, &mut this.port_manager.clone()).await;
                     match result {
-                        Ok((port, listener)) => {
+                        Ok((available_port, listener)) => {
+                            let port = *available_port;
                             let cancel = event.close_listener;
                             let conn_event_chan = event.incoming_events;
                             spawn(async move {
@@ -90,11 +100,12 @@ impl DataServer {
                     }
                 }
                 event::Payload::RegisterUdp { port } => {
-                    let result: Result<(u16, UdpSocket), tonic::Status> =
-                        create_socket::<Udp>(port, this.entrypoint_config.port_range.clone()).await;
+                    let result: Result<(Available, UdpSocket), tonic::Status> =
+                        create_socket::<Udp>(port, &mut this.port_manager.clone()).await;
 
                     match result {
-                        Ok((port, socket)) => {
+                        Ok((available_port, socket)) => {
+                            let port = *available_port;
                             let socket = socket;
                             let cancel = event.close_listener;
                             let conn_event_chan = event.incoming_events;
@@ -102,7 +113,7 @@ impl DataServer {
                                 Udp::new(socket, conn_event_chan.clone())
                                     .serve(cancel)
                                     .await;
-                                info!(port, "udp server closed");
+                                info!(port = *available_port, "udp server closed");
                             });
                             event
                                 .resp
@@ -234,15 +245,14 @@ impl DataServer {
                 None
             }
         } else {
-            let result =
-                create_socket::<Tcp>(*port, self.entrypoint_config.port_range.clone()).await;
+            let result = create_socket::<Tcp>(*port, &mut self.port_manager.clone()).await;
             match result {
-                Ok((random_port, listener)) => {
-                    *port = random_port;
+                Ok((available_port, listener)) => {
+                    *port = *available_port;
                     let conn_event_chan = conn_event_chan.clone();
                     spawn(async move {
                         Http::new(
-                            random_port,
+                            *available_port,
                             Arc::new(Box::new(FixedRegistry::new(conn_event_chan))),
                         )
                         .serve_with_listener(listener, shutdown);

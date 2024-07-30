@@ -1,5 +1,6 @@
 mod control_server;
 mod data_server;
+mod port;
 mod tunnel;
 pub use control_server::Server;
 
@@ -24,6 +25,7 @@ pub struct EntrypointConfig {
     pub ip: Vec<IpAddr>,
     pub vhttp_behind_proxy_tls: bool,
     pub port_range: RangeInclusive<u16>,
+    pub exclude_ports: Vec<u16>,
 }
 
 impl Default for Config {
@@ -43,6 +45,7 @@ impl Default for EntrypointConfig {
             ip: Vec::new(),
             vhttp_behind_proxy_tls: false,
             port_range: 1024..=65535,
+            exclude_ports: Vec::new(),
         }
     }
 }

@@ -40,6 +40,9 @@ struct Args {
     /// Maximum accepted port number.
     #[clap(long, default_value_t = 65535)]
     random_max_port: u16,
+
+    #[clap(long, default_value = "[]")]
+    exclude_ports: Vec<u16>,
 }
 
 #[tokio::main]
@@ -71,6 +74,7 @@ async fn main() {
             ip: args.ip,
             vhttp_behind_proxy_tls: args.vhttp_behind_proxy_tls,
             port_range: args.random_min_port..=args.random_max_port,
+            exclude_ports: args.exclude_ports,
         },
     });
     if let Err(err) = server.run(cancel.cancelled()).await {

@@ -1,5 +1,3 @@
-use std::ops::RangeInclusive;
-
 use crate::{
     bridge::{self, DataSenderBridge, IdDataSenderBridge},
     event,
@@ -10,6 +8,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use uuid::Uuid;
+
+use super::port::{Available, PortManager};
 
 pub(crate) mod http;
 pub(crate) mod tcp;
@@ -87,22 +87,27 @@ pub(crate) trait SocketCreator {
 
 pub(crate) async fn create_socket<T: SocketCreator>(
     port: u16,
-    free_port_range: RangeInclusive<u16>,
-) -> anyhow::Result<(u16, T::Output), Status> {
+    port_manager: &mut PortManager,
+) -> anyhow::Result<(Available, T::Output), Status> {
     if port > 0 {
         let socket = T::create_socket(port).await?;
-        Ok((port, socket))
+        Ok((port.into(), socket))
     } else {
         // refer: https://github.com/ekzhang/bore/blob/v0.5.1/src/server.rs#L88
         // todo: a better way to find a free port
-        for _ in 0..150 {
-            let freeport = fastrand::u16(free_port_range.clone());
-            let result = T::create_socket(freeport).await;
+        loop {
+            let port: Available = match port_manager.get() {
+                None => {
+                    return Err(Status::resource_exhausted("no available port"));
+                }
+                Some(port) => port,
+            };
+            let result = T::create_socket(*port).await;
             if result.is_err() {
+                port_manager.remove(*port);
                 continue;
             }
-            return Ok((freeport, result.unwrap()));
+            return Ok((port, result.unwrap()));
         }
-        Err(Status::internal("failed to find a free port"))
     }
 }

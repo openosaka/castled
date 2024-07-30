@@ -265,6 +265,8 @@ dependencies = [
  "hyper 1.4.1",
  "hyper-util",
  "prost",
+ "rand",
+ "rand_chacha",
  "reqwest",
  "serde",
  "tokio",
