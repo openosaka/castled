@@ -201,7 +201,7 @@ impl DataServer {
             }
         }
 
-        info!("tcp manager quit");
+        info!("data server quit");
         Ok(())
     }
 
@@ -294,4 +294,26 @@ impl DataServer {
 }
 
 #[cfg(test)]
-mod test {}
+mod test {
+    use async_shutdown::ShutdownManager;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_cannot_listen_on_same_vhttp_port() {
+        let (_t1, r1) = mpsc::channel(10);
+        let shutdown1 = ShutdownManager::new();
+        let signal1 = shutdown1.wait_shutdown_triggered();
+        let s1 = DataServer::new(3000, EntrypointConfig::default());
+        let h1 = tokio::spawn(async move { s1.listen(signal1, r1).await });
+
+        let (_t2, r2) = mpsc::channel(10);
+        let s2 = DataServer::new(3000, EntrypointConfig::default());
+        let shutdown2 = ShutdownManager::new();
+        let h2 = s2.listen(shutdown2.wait_shutdown_triggered(), r2).await;
+        assert!(h2.is_err());
+        shutdown1.trigger_shutdown(()).unwrap();
+        let h1 = tokio::join!(h1);
+        assert!(h1.0.is_ok());
+    }
+}
