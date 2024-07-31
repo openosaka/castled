@@ -16,8 +16,11 @@ use super::{
 use async_shutdown::ShutdownSignal;
 use bytes::Bytes;
 use rand::prelude::*;
-use rand_chacha::ChaCha8Rng;
-use std::sync::Arc;
+use rand::rngs::StdRng;
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::{
     net::{TcpListener, UdpSocket},
     spawn,
@@ -34,7 +37,6 @@ pub(crate) struct DataServer {
     http_registry: DynamicRegistry,
     entrypoint_config: EntrypointConfig,
     port_manager: PortManager,
-    rng: ChaCha8Rng,
 }
 
 impl DataServer {
@@ -44,13 +46,11 @@ impl DataServer {
             entrypoint_config.port_range.clone(),
             entrypoint_config.exclude_ports.clone(),
         );
-        let rng = ChaCha8Rng::from_entropy();
         Self {
             vhttp_port,
             http_registry,
             port_manager,
             entrypoint_config,
-            rng,
         }
     }
 
@@ -76,6 +76,12 @@ impl DataServer {
         tokio::spawn(async move {
             http_tunnel.serve_with_listener(tcp_listener, cancel).await;
         });
+
+        let since_the_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards");
+        let seed = since_the_epoch.as_secs();
+        let mut rng = StdRng::seed_from_u64(seed);
 
         while let Some(event) = receiver.recv().await {
             match event.payload {
@@ -156,6 +162,7 @@ impl DataServer {
                             random_subdomain,
                             &mut port,
                             event.incoming_events,
+                            &mut rng,
                         ))
                         .await;
                     let this = Arc::clone(&this);
@@ -206,6 +213,7 @@ impl DataServer {
         random_subdomain: bool,
         port: &mut u16,
         conn_event_chan: mpsc::Sender<event::UserIncoming>,
+        rng: &mut StdRng,
     ) -> Option<Status> {
         if !domain.is_empty() {
             // forward the http request from this domain to control server.
@@ -219,12 +227,13 @@ impl DataServer {
 
         if subdomain.is_empty() && random_subdomain {
             loop {
-                let subdomain2 = Bytes::from(self.generate_random_subdomain(8).await);
+                let subdomain2 = Bytes::from(self.generate_random_subdomain(8, rng).await);
                 if !self.http_registry.subdomain_registered(&subdomain2) {
                     *subdomain = subdomain2;
                     break;
                 }
             }
+            info!(?subdomain, "random subdomain generated");
         }
 
         if !subdomain.is_empty() {
@@ -271,8 +280,7 @@ impl DataServer {
         }
     }
 
-    async fn generate_random_subdomain(&self, length: usize) -> String {
-        let mut rng = self.rng.clone();
+    async fn generate_random_subdomain(&self, length: usize, rng: &mut StdRng) -> String {
         static CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
         let subdomain: String = (0..length)
             .map(|_| {
@@ -283,3 +291,6 @@ impl DataServer {
         subdomain
     }
 }
+
+#[cfg(test)]
+mod test {}
