@@ -28,7 +28,7 @@ pub(crate) async fn create_udp_socket(port: u16) -> Result<UdpSocket, Status> {
 
 fn map_bind_error(err: std::io::Error) -> Status {
     match err.kind() {
-        std::io::ErrorKind::AddrInUse => Status::already_exists("port already in use"),
+        std::io::ErrorKind::AddrInUse => Status::already_exists("port is already in use"),
         std::io::ErrorKind::PermissionDenied => Status::permission_denied("permission denied"),
         _ => {
             error!("failed to bind port: {}", err);

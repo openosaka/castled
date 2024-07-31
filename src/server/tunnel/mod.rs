@@ -1,5 +1,3 @@
-use std::ops::RangeInclusive;
-
 use crate::{
     bridge::{self, DataSenderBridge, IdDataSenderBridge},
     event,
@@ -9,7 +7,10 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
+use tracing::error;
 use uuid::Uuid;
+
+use super::port::{Available, PortManager};
 
 pub(crate) mod http;
 pub(crate) mod tcp;
@@ -87,22 +88,45 @@ pub(crate) trait SocketCreator {
 
 pub(crate) async fn create_socket<T: SocketCreator>(
     port: u16,
-    free_port_range: RangeInclusive<u16>,
-) -> anyhow::Result<(u16, T::Output), Status> {
+    port_manager: &mut PortManager,
+) -> anyhow::Result<(Available, T::Output), Status> {
     if port > 0 {
-        let socket = T::create_socket(port).await?;
-        Ok((port, socket))
-    } else {
-        // refer: https://github.com/ekzhang/bore/blob/v0.5.1/src/server.rs#L88
-        // todo: a better way to find a free port
-        for _ in 0..150 {
-            let freeport = fastrand::u16(free_port_range.clone());
-            let result = T::create_socket(freeport).await;
-            if result.is_err() {
-                continue;
-            }
-            return Ok((freeport, result.unwrap()));
+        if !port_manager.allow(port) {
+            return Err(Status::invalid_argument(
+                "port is not in the allowed range or is excluded",
+            ));
         }
-        Err(Status::internal("failed to find a free port"))
+
+        match port_manager.take(port) {
+            None => Err(Status::already_exists("port is already in use")),
+            Some(mut available_port) => match T::create_socket(port).await {
+                Err(e) => {
+                    available_port.unavailable();
+                    Err(e)
+                }
+                Ok(socket) => Ok((available_port, socket)),
+            },
+        }
+    } else {
+        for _ in 0..150 {
+            let mut available_port: Available = match port_manager.get() {
+                None => {
+                    return Err(Status::resource_exhausted("no available port"));
+                }
+                Some(port) => port,
+            };
+            let port = *available_port;
+            match T::create_socket(port).await {
+                Err(err) => {
+                    error!(?err, port, "failed to create socket");
+                    available_port.unavailable();
+                    continue;
+                }
+                Ok(socket) => {
+                    return Ok((available_port, socket));
+                }
+            }
+        }
+        Err(Status::resource_exhausted("no available port"))
     }
 }

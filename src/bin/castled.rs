@@ -40,10 +40,13 @@ struct Args {
     /// Maximum accepted port number.
     #[clap(long, default_value_t = 65535)]
     random_max_port: u16,
+
+    #[clap(long, required = false, default_value = "")]
+    exclude_ports: String,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     // 6669 is the default tokio console server port of the server,
     // use `TOKIO_CONSOLE_BIND=127.0.0.1:6670` to change it.
     setup_logging(6669);
@@ -71,9 +74,13 @@ async fn main() {
             ip: args.ip,
             vhttp_behind_proxy_tls: args.vhttp_behind_proxy_tls,
             port_range: args.random_min_port..=args.random_max_port,
+            exclude_ports: args
+                .exclude_ports
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.parse().unwrap())
+                .collect(),
         },
     });
-    if let Err(err) = server.run(cancel.cancelled()).await {
-        eprintln!("server error: {:?}", err);
-    }
+    server.run(cancel.cancelled()).await
 }
