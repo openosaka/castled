@@ -91,12 +91,14 @@ pub(crate) async fn create_socket<T: SocketCreator>(
     port_manager: &mut PortManager,
 ) -> anyhow::Result<(Available, T::Output), Status> {
     if port > 0 {
-        if !port_manager.has(port) {
-            return Err(Status::invalid_argument("port is not in the range"));
+        if !port_manager.allow(port) {
+            return Err(Status::invalid_argument(
+                "port is not in the allowed range or is excluded",
+            ));
         }
 
         match port_manager.take(port) {
-            None => Err(Status::internal("port is taken, should not happen")),
+            None => Err(Status::already_exists("port is already in use")),
             Some(mut available_port) => match T::create_socket(port).await {
                 Err(e) => {
                     available_port.unavailable();
@@ -120,7 +122,9 @@ pub(crate) async fn create_socket<T: SocketCreator>(
                     available_port.unavailable();
                     continue;
                 }
-                Ok(socket) => return Ok((available_port, socket)),
+                Ok(socket) => {
+                    return Ok((available_port, socket));
+                }
             }
         }
         Err(Status::resource_exhausted("no available port"))

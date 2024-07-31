@@ -1,32 +1,49 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashSet;
 use rand::prelude::*;
+use rand::rngs::StdRng;
 use rand::seq::IteratorRandom;
-use rand_chacha::ChaCha8Rng;
 
 #[derive(Clone)]
 pub struct PortManager {
-    rng: ChaCha8Rng,
+    min: u16,
+    max: u16,
+    exclude_ports: Arc<DashSet<u16>>,
+    /// TODO(sword): remove this mutex.
+    /// we don't need it because we only has one actual consumer of PortManager
+    /// but the caller code requires `Sync`, so we have to use `Mutex`.
+    rng: Arc<Mutex<StdRng>>,
     pool: Arc<DashSet<u16>>,
 }
 
 impl PortManager {
     pub fn new(port_range: std::ops::RangeInclusive<u16>, exclude_ports: Vec<u16>) -> Self {
+        let min = *port_range.start();
+        let max = *port_range.end();
         let ports: Vec<_> = port_range
             .filter(|port| !exclude_ports.contains(port))
             .collect();
 
         let pool = DashSet::from_iter(ports);
-        let rng = ChaCha8Rng::from_entropy();
+        let since_the_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards");
+        let seed = since_the_epoch.as_secs();
+        let rng = StdRng::seed_from_u64(seed);
         Self {
-            rng,
+            rng: Arc::new(Mutex::new(rng)),
+            min,
+            max,
+            exclude_ports: Arc::new(exclude_ports.into_iter().collect()),
             pool: Arc::new(pool),
         }
     }
 
-    pub fn has(&self, port: u16) -> bool {
-        self.pool.contains(&port)
+    // check if the port is a valid port, doesn't guarantee the port is available.
+    pub fn allow(&self, port: u16) -> bool {
+        port >= self.min && port <= self.max && !self.exclude_ports.contains(&port)
     }
 
     // take a port from the pool.
@@ -49,7 +66,10 @@ impl PortManager {
 
     // get a random available port.
     pub fn get(&mut self) -> Option<Available> {
-        let port = *self.pool.iter().choose(&mut self.rng)?;
+        let mut rng = self.rng.lock().unwrap();
+        let mut rng = &mut *rng;
+        let port = *self.pool.iter().choose(&mut rng)?;
+        println!("get port: {}", port);
         self.take(port)
     }
 }
@@ -96,7 +116,7 @@ impl From<Available> for u16 {
 
 #[cfg(test)]
 mod test {
-    use std::ops::RangeInclusive;
+    use std::{collections::HashSet, ops::RangeInclusive};
 
     use super::*;
 
@@ -126,6 +146,51 @@ mod test {
         assert!(!ports.contains(&2020));
 
         drop(ports);
+    }
+
+    #[test]
+    fn test_it_shares_same_memory() {
+        let port_range: RangeInclusive<u16> = 3000..=3011;
+        let exclude_ports = vec![3010];
+        let len = port_range.len() - exclude_ports.len();
+        let mut port_manager = PortManager::new(port_range, exclude_ports.clone());
+        let mut port_manager2 = port_manager.clone();
+
+        let _p1 = port_manager.get();
+        let _p2 = port_manager.get();
+        let _p3 = port_manager.get();
+        let _p4 = port_manager2.get();
+        let _p5 = port_manager2.get();
+
+        assert_eq!(port_manager.pool.len(), len - 5);
+        assert_eq!(port_manager.pool.len(), port_manager2.pool.len());
+        for port in port_manager.pool.iter() {
+            assert!(port_manager2.pool.contains(&port));
+        }
+
+        let mut ports = vec![];
+        for _ in 0..100 {
+            let mut port_manager = port_manager.clone();
+            let available_port = port_manager.get().unwrap();
+            let port = *available_port;
+            ports.push(port);
+        }
+        assert!(
+            // test randomness
+            ports
+                .into_iter()
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .len()
+                > 1
+        );
+
+        port_manager.get();
+        port_manager.get();
+        port_manager.get();
+        port_manager.get();
+        port_manager.get();
     }
 
     #[tokio::test]
