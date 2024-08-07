@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let client = Client::new(args.server_addr).await.unwrap();
+    let client = Client::new(args.server_addr).await?;
     let tunnel;
     let shutdown: ShutdownManager<i8> = ShutdownManager::new();
     let wait_complete = shutdown.wait_shutdown_complete();
@@ -146,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
             panic!("Failed to listen for the ctrl-c signal: {:?}", e);
         }
         info!("Received ctrl-c signal. Shutting down...");
-        shutdown.trigger_shutdown(0).unwrap();
+        shutdown.trigger_shutdown(0).ok();
     });
 
     let code = wait_complete.await;
