@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use async_shutdown::{ShutdownManager, ShutdownSignal};
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{transport::Channel, Response, Status, Streaming};
 use tracing::{debug, error, info, instrument, span};
@@ -9,6 +9,7 @@ use tokio::{
     io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
     select,
     sync::{mpsc, oneshot},
+    time::timeout,
 };
 
 use crate::socket::Dialer;
@@ -86,30 +87,22 @@ impl Client {
         let dialer = tunnel.dialer;
 
         tokio::spawn(async move {
-            let run_tunnel = self.handle_tunnel(
-                shutdown.wait_shutdown_triggered(),
-                pb_tunnel,
-                dialer,
-                Some(move |entrypoint| {
-                    let _ = entrypoint_tx.send(entrypoint);
-                }),
-            );
-
-            tokio::select! {
-                _ = shutdown.wait_shutdown_triggered() => {
-                    debug!("cancelling tcp tunnel");
-                }
-                result = run_tunnel =>  match result {
-                    Ok(_) => {
-                        info!("tunnel closed");
-                    },
-                    Err(err) => {
-                        error!(err = ?err, "tunnel closed unexpectedly");
-                        return shutdown.trigger_shutdown_token(1);
-                    },
-                }
+            if let Err(err) = self
+                .handle_tunnel(
+                    shutdown.wait_shutdown_triggered(),
+                    pb_tunnel,
+                    dialer,
+                    Some(move |entrypoint| {
+                        let _ = entrypoint_tx.send(entrypoint);
+                    }),
+                )
+                .await
+            {
+                error!(?err, "failed to handle tunnel");
+                shutdown.trigger_shutdown_token(1)
+            } else {
+                shutdown.trigger_shutdown_token(0)
             }
-            shutdown.trigger_shutdown_token(0)
         });
 
         let entrypoint = entrypoint_rx
@@ -188,37 +181,32 @@ impl Client {
         hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
     ) -> Result<()> {
         let mut rpc_client = self.grpc_client.clone();
-        let register = self.register_tunnel(&mut rpc_client, tunnel);
+        let response = timeout(
+            Duration::from_secs(3),
+            self.register_tunnel(&mut rpc_client, tunnel),
+        )
+        .await??;
 
-        tokio::select! {
-            _ = shutdown.clone() => {
-                Ok(())
-            }
-            register_resp = register => {
-                let register_resp = register_resp?;
-                self.handle_control_stream(
-                    shutdown.clone(),
-                    rpc_client,
-                    register_resp,
-                    dial,
-                    hook,
-                ).await
-            }
-        }
+        self.handle_control_stream(
+            shutdown.clone(),
+            rpc_client,
+            response.into_inner(),
+            dial,
+            hook,
+        )
+        .await
     }
 
     /// Handles the control stream from the server.
-    #[instrument(skip(self, shutdown, rpc_client, register_resp, hook))]
+    #[instrument(skip(self, shutdown, rpc_client, control_stream, hook))]
     async fn handle_control_stream(
         &self,
         shutdown: ShutdownSignal<i8>,
         rpc_client: TunnelServiceClient<Channel>,
-        register_resp: tonic::Response<Streaming<ControlCommand>>,
+        mut control_stream: Streaming<ControlCommand>,
         dialer: Dialer,
         mut hook: Option<impl FnOnce(Vec<String>) + Send + 'static>,
     ) -> Result<()> {
-        let mut control_stream = register_resp.into_inner();
-
         let entrypoint = self
             .wait_until_registered(shutdown.clone(), &mut control_stream)
             .await?;
@@ -226,17 +214,6 @@ impl Client {
             hook(entrypoint);
         }
 
-        self.start_streaming(shutdown, &mut control_stream, rpc_client, dialer)
-            .await
-    }
-
-    async fn start_streaming(
-        &self,
-        shutdown: ShutdownSignal<i8>,
-        control_stream: &mut Streaming<ControlCommand>,
-        rpc_client: TunnelServiceClient<Channel>,
-        dialer: Dialer,
-    ) -> Result<()> {
         let dialer = Arc::new(dialer);
         loop {
             tokio::select! {
@@ -245,26 +222,24 @@ impl Client {
                         debug!("control stream closed");
                         break;
                     }
-                    let result = result.unwrap();
-                    if result.is_err() {
-                        return Err(result.unwrap_err().into());
-                    }
-                    let command = result.unwrap();
+                    let command = result.unwrap()?;
                     match command.payload {
                         Some(Payload::Init(_)) => {
                             error!("unexpected init command");
                         }
                         Some(Payload::Work(work)) => {
                             debug!("received work command, starting to forward traffic");
-                            if let Err(err) = handle_work_traffic(
-                                rpc_client.clone() /* cheap clone operation */,
-                                &work.connection_id,
-                                dialer.clone(),
-                            ).await {
-                                error!(err = ?err, "failed to handle work traffic");
-                            } else {
-                                continue; // the only path to success.
-                            }
+                            let rpc_client = rpc_client.clone();
+                            let dialer = dialer.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) = handle_work_traffic(
+                                    rpc_client,
+                                    &work.connection_id,
+                                    dialer,
+                                ).await {
+                                    error!(?err, "failed to handle work traffic");
+                                }
+                            });
                         }
                         None => {
                             error!("missing payload in work command");

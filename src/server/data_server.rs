@@ -315,7 +315,7 @@ mod test {
 
     #[tokio::test]
     async fn test_cannot_listen_on_same_vhttp_port() {
-        debug::setup_logging(6669);
+        // debug::setup_logging(6669); // enable for debug
         let (_t1, r1) = mpsc::channel(10);
         let shutdown1 = ShutdownManager::new();
         let signal1 = shutdown1.wait_shutdown_triggered();
@@ -333,7 +333,5 @@ mod test {
         let h1 = tokio::join!(h1);
         assert!(h1.0.is_ok());
         shutdown2.trigger_shutdown(()).unwrap();
-
-        sleep(std::time::Duration::from_secs(1000)).await;
     }
 }

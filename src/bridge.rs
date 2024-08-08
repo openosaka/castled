@@ -51,10 +51,10 @@ impl DataSenderBridge {
 /// DataSender is the sender holden by control server to send data to data server.
 ///
 /// this channel has two purposes:
-/// 1. when the server receives [`crate::protocol::pb::traffic_to_server::Action::Start`] action from [`crate::protocol::pb::tunnel_service_server::TunnelService::data`] streaming,
-/// the server will send [`BridgeData::Sender`] through this channel,
+/// 1. when the server receives [`crate::protocol::pb::traffic_to_server::Action::Start`]
+///    from the server will send [`BridgeData::Sender`] through this channel,
 /// 2. when the server receives [`crate::protocol::pb::traffic_to_server::Action::Sending`],
-/// the server will send [`BridgeData::Data`] through this channel.
+///    the server will send [`BridgeData::Data`] through this channel.
 pub(crate) type DataSender = mpsc::Sender<BridgeData>;
 
 /// BridgeData is the data of the `BridgeChan`.
