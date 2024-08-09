@@ -87,6 +87,7 @@ impl Client {
         let dialer = tunnel.dialer;
 
         tokio::spawn(async move {
+            let _delay = shutdown.delay_shutdown_token();
             if let Err(err) = self
                 .handle_tunnel(
                     shutdown.wait_shutdown_triggered(),

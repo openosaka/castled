@@ -309,7 +309,7 @@ mod test {
     use async_shutdown::ShutdownManager;
     use tokio::time::sleep;
 
-    use crate::debug;
+    // use crate::debug;
 
     use super::*;
 
