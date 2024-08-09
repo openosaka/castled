@@ -15,7 +15,7 @@ use anyhow::Context as _;
 use async_shutdown::{ShutdownManager, ShutdownSignal};
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures::{Future, StreamExt};
+use futures::StreamExt;
 use std::sync::Arc;
 use std::{net::ToSocketAddrs, pin::Pin};
 use tokio::sync::mpsc;
@@ -56,7 +56,7 @@ pub struct Server {
     event_bus: DataServer,
 
     /// shutdown is the shutdown listener of the server.
-    shutdown: ShutdownManager<()>,
+    shutdown: ShutdownManager<i8>,
 
     /// handler is the grpc handler of the control server.
     handler: ControlHandler,
@@ -64,8 +64,7 @@ pub struct Server {
 
 impl Server {
     /// Create a new server instance.
-    pub fn new(config: Config) -> Self {
-        let shutdown: ShutdownManager<()> = ShutdownManager::new();
+    pub fn new(config: Config, shutdown: ShutdownManager<i8>) -> Self {
         let (event_tx, event_rx) = mpsc::channel(1024);
 
         let server = GrpcServer::builder()
@@ -89,17 +88,19 @@ impl Server {
     /// # Examples
     ///
     /// ```no_run
+    /// use async_shutdown::ShutdownManager;
+    ///
     /// async fn run_server() {
+    ///     let shutdown = ShutdownManager::new();
     ///     let server = castled::server::Server::new(castled::server::Config{
     ///         control_port: 8610,
     ///         vhttp_port: 8611,
     ///         ..Default::default()
-    ///     });
-    ///     let shutdown = tokio::signal::ctrl_c();
-    ///     server.run(shutdown).await.unwrap();
+    ///     }, shutdown.clone());
+    ///     server.run().await.unwrap();
     /// }
     /// ```
-    pub async fn run(self, shutdown: impl Future) -> anyhow::Result<()> {
+    pub async fn run(mut self) -> anyhow::Result<()> {
         let addr = format!("0.0.0.0:{}", self.control_port)
             .to_socket_addrs()
             .context("parse control port")?
@@ -119,28 +120,19 @@ impl Server {
 
         info!(?addr, "starting control server");
 
-        let mut control_server = self.control_server;
-        let run_control_server = async move {
-            control_server
-                .add_service(TunnelServiceServer::new(self.handler))
-                .serve_with_shutdown(addr, async {
-                    shutdown_listener_control_server.await;
-                })
-                .await
-        };
-
-        tokio::select! {
-            _ = shutdown => {
-                info!("shutdown signal received, shutting down the server");
-            }
-            res = run_control_server => {
-                if let Err(err) = res {
-                    error!(err = ?err, "server quit");
-                }
-            }
+        if let Err(err) = self
+            .control_server
+            .add_service(TunnelServiceServer::new(self.handler))
+            .serve_with_shutdown(addr, async {
+                shutdown_listener_control_server.await;
+            })
+            .await
+        {
+            error!(err = ?err, "server quit");
+            self.shutdown.trigger_shutdown_token(1);
+        } else {
+            self.shutdown.trigger_shutdown_token(0);
         }
-
-        self.shutdown.trigger_shutdown(())?;
 
         Ok(())
     }
@@ -152,11 +144,11 @@ struct ControlHandler {
     event_tx: mpsc::Sender<event::ClientEvent>,
     bridges: Arc<DashMap<Bytes, bridge::DataSenderBridge>>,
     close_sender_notifiers: Arc<DashMap<Bytes, CancellationToken>>,
-    shutdown: ShutdownSignal<()>,
+    shutdown: ShutdownSignal<i8>,
 }
 
 impl ControlHandler {
-    fn new(shutdown: ShutdownSignal<()>, event_tx: mpsc::Sender<event::ClientEvent>) -> Self {
+    fn new(shutdown: ShutdownSignal<i8>, event_tx: mpsc::Sender<event::ClientEvent>) -> Self {
         Self {
             bridges: Arc::new(DashMap::new()),
             close_sender_notifiers: Arc::new(DashMap::new()),
@@ -480,22 +472,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_server() {
-        let server = Server::new(Config {
-            control_port: 8610,
-            vhttp_port: 8611,
-            entrypoint: EntrypointConfig {
-                domain: vec!["example.com".to_string()],
-                ..Default::default()
+        let shutdown = ShutdownManager::new();
+        let server = Server::new(
+            Config {
+                control_port: 8610,
+                vhttp_port: 8611,
+                entrypoint: EntrypointConfig {
+                    domain: vec!["example.com".to_string()],
+                    ..Default::default()
+                },
             },
-        });
-        let cancel_w = CancellationToken::new();
-        let cancel = cancel_w.clone();
+            shutdown.clone(),
+        );
 
         tokio::spawn(async move {
-            let result = server.run(cancel.cancelled()).await;
+            sleep(tokio::time::Duration::from_millis(50)).await;
+            let result = server.run().await;
             assert!(result.is_ok());
         });
 
-        sleep(tokio::time::Duration::from_millis(200)).await;
+        shutdown.trigger_shutdown(0).unwrap();
     }
 }

@@ -472,19 +472,21 @@ impl TestServer {
 }
 
 async fn start_server(entrypoint_config: EntrypointConfig) -> TestServer {
+    let shutdown = ShutdownManager::new();
     let control_port = free_port().unwrap();
     let vhttp_port = free_port().unwrap();
-    let server = Server::new(Config {
-        vhttp_port,
-        control_port,
-        entrypoint: entrypoint_config,
-    });
-    let shutdown = ShutdownManager::new();
-    let shutdown2 = shutdown.clone();
+    let server = Server::new(
+        Config {
+            vhttp_port,
+            control_port,
+            entrypoint: entrypoint_config,
+        },
+        shutdown.clone(),
+    );
     tokio::spawn(async move {
-        server.run(shutdown2.wait_shutdown_triggered()).await;
+        server.run().await;
     });
-    sleep(tokio::time::Duration::from_millis(200)).await;
+    sleep(tokio::time::Duration::from_millis(20)).await;
 
     TestServer {
         control_port,

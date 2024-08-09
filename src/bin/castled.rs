@@ -1,12 +1,13 @@
 use std::net::IpAddr;
 
+use anyhow::Ok;
+use async_shutdown::ShutdownManager;
 use castled::{
     debug::setup_logging,
     server::{Config, EntrypointConfig, Server},
 };
 use clap::Parser;
 use tokio::signal;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 #[derive(Parser, Debug, Default)]
@@ -54,8 +55,28 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     info!("server args: {:?}", args);
 
-    let cancel_w = CancellationToken::new();
-    let cancel = cancel_w.clone();
+    let shutdown = ShutdownManager::new();
+    let wait_complete = shutdown.wait_shutdown_complete();
+
+    let server = Server::new(
+        Config {
+            control_port: args.control_port,
+            vhttp_port: args.vhttp_port,
+            entrypoint: EntrypointConfig {
+                domain: args.domain,
+                ip: args.ip,
+                vhttp_behind_proxy_tls: args.vhttp_behind_proxy_tls,
+                port_range: args.random_min_port..=args.random_max_port,
+                exclude_ports: args
+                    .exclude_ports
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.parse().unwrap())
+                    .collect(),
+            },
+        },
+        shutdown.clone(),
+    );
 
     tokio::spawn(async move {
         if let Err(e) = signal::ctrl_c().await {
@@ -63,24 +84,12 @@ async fn main() -> anyhow::Result<()> {
             panic!("Failed to listen for the ctrl-c signal: {:?}", e);
         }
         info!("Received ctrl-c signal. Shutting down...");
-        cancel_w.cancel();
+        shutdown.trigger_shutdown(0).ok();
     });
 
-    let server = Server::new(Config {
-        control_port: args.control_port,
-        vhttp_port: args.vhttp_port,
-        entrypoint: EntrypointConfig {
-            domain: args.domain,
-            ip: args.ip,
-            vhttp_behind_proxy_tls: args.vhttp_behind_proxy_tls,
-            port_range: args.random_min_port..=args.random_max_port,
-            exclude_ports: args
-                .exclude_ports
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .map(|s| s.parse().unwrap())
-                .collect(),
-        },
-    });
-    server.run(cancel.cancelled()).await
+    server.run().await?;
+    match wait_complete.await {
+        0 => Ok(()),
+        code => std::process::exit(code as i32),
+    }
 }

@@ -220,8 +220,7 @@ impl Client {
             tokio::select! {
                 result = control_stream.next() => {
                     if result.is_none() {
-                        debug!("control stream closed");
-                        break;
+                        return Err(anyhow::anyhow!("control stream closed unexpectedly"));
                     }
                     let command = result.unwrap()?;
                     match command.payload {
@@ -254,7 +253,6 @@ impl Client {
                 }
             }
         }
-        Ok(())
     }
 }
 
