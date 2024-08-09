@@ -56,7 +56,7 @@ impl DataServer {
 
     pub(crate) async fn listen(
         self,
-        shutdown: ShutdownSignal<()>,
+        shutdown: ShutdownSignal<i8>,
         mut receiver: mpsc::Receiver<event::ClientEvent>,
     ) -> anyhow::Result<()> {
         let this = Arc::new(self);
@@ -329,9 +329,9 @@ mod test {
         let shutdown2 = ShutdownManager::new();
         let h2 = s2.listen(shutdown2.wait_shutdown_triggered(), r2).await;
         assert!(h2.is_err());
-        shutdown1.trigger_shutdown(()).unwrap();
+        shutdown1.trigger_shutdown(0).unwrap();
         let h1 = tokio::join!(h1);
         assert!(h1.0.is_ok());
-        shutdown2.trigger_shutdown(()).unwrap();
+        shutdown2.trigger_shutdown(0).unwrap();
     }
 }
