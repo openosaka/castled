@@ -426,6 +426,38 @@ async fn test_assigned_entrypoint() {
     }
 }
 
+#[tokio::test]
+async fn test_client_auto_close_when_server_crash() {
+    init();
+    let server = start_server(Default::default()).await;
+    let control_addr = server.control_addr().clone();
+
+    let client_handler = tokio::spawn(async move {
+        sleep(tokio::time::Duration::from_millis(50)).await; // wait for server to start
+        let shutdown = ShutdownManager::new();
+
+        let client = Client::new(control_addr).await.unwrap();
+        let _ = client
+            .start_tunnel(
+                Tunnel::new(
+                    "test",
+                    SocketAddr::from(([127, 0, 0, 1], 8971)),
+                    RemoteConfig::Tcp(free_port().unwrap()),
+                ),
+                shutdown.clone(),
+            )
+            .await;
+
+        shutdown.wait_shutdown_complete().await;
+    });
+
+    sleep(tokio::time::Duration::from_millis(200)).await;
+    server.cancel.trigger_shutdown(0).unwrap();
+
+    let client_exit = tokio::join!(client_handler);
+    assert!(client_exit.0.is_ok());
+}
+
 struct TestServer {
     control_port: u16,
     vhttp_port: u16,
